@@ -1,18 +1,19 @@
 # Housei Development Notes
 
 Status: independent Japanese product (縫製), started from a yohsai 0.14.7
-source snapshot. Package version is `0.1.0` under `id = "housei"`. Not binary-
-or data-compatible with yohsai (`yohsai_*` attributes / `yohsai-pattern` schema).
+source snapshot. Package version is `0.2.1` under `id = "housei"`. Not binary-
+or data-compatible with yohsai.
 
 ## Architecture
 
-- Illustrator PDF is authoritative for topology and annotations.
-- Load creates separate pattern-part meshes.
-- Zero GRAVITY promotes parts through PLACED -> PENDING -> DONE without reversal.
-- A new pending stage runs Sewing automatically from positioned source
-  parts; completed parts remain available as connectivity anchors. The single
-  independent deformation Lock is cleared from all pending parts before Sewing.
-- A press starts from source-part world vertices.
+- A part is any mesh with `HOU` (JSON string custom property). Stateless: HOU
+  holds metadata + base64 NPY payloads; no PLACED/PENDING/DONE machine.
+- Load writes `CUTTINGCLOTH_NNN` (role `cutting`) with HOU on each panel.
+  Cut out (`裁断`) copies selected HOU parts into the Clothes work collection
+  (role `clothes`) and lifts Z by 0.30 m.
+- Zero GRAVITY: selection in Clothes deforms; non-selected HOU parts pin via
+  `housei_kitsuke_locked` (same pin path as the old Existing Lock / DONE).
+  Empty selection → no-op. Sewing rebuilds when `housei_sewing_verified` is false.
 - Each press first equalizes every seam's two sides to matching vertex
   counts, recutting only the shorter side from the pattern stored on the
   collection. Matched sides pair 1:1 so the longer edge gathers. A recut changes
@@ -24,10 +25,6 @@ or data-compatible with yohsai (`yohsai_*` attributes / `yohsai-pattern` schema)
   which is what makes the scene intersection-free at the start and the step
   cost small. A press sews from flat, so pressing again re-sews rather than
   advancing.
-- Existing Lock is event-driven. Load and turning it on lock PLACED/DONE and
-  unlock PENDING; turning it off unlocks non-placed parts. Select Lock is a
-  button that toggles Lock on the selection. Both may be off; both must not be
-  on. A completed press never changes Lock by itself.
 - Prepare for ZOZO (`ZOZO用準備作業`) re-cuts, copies, and checks, in that
   order: `remesh_with_seam_counts` first so what goes over is a panel the
   current triangulation built rather than whichever one was in the scene, then

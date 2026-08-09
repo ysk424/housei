@@ -39,6 +39,7 @@ import tempfile
 import bpy
 import numpy as np
 
+from .i18n import msg
 from .kitsuke import (
     KitsukeError,
     _PartRange,
@@ -124,9 +125,11 @@ def _zozo_root() -> Path:
             return candidate
     searched = "\n".join(f"  {candidate}" for candidate in candidates)
     raise KitsukeError(
-        "The ZOZO Contact Solver tree was not found. Set its path in "
-        "Preferences > Add-ons > Housei (or the "
-        f"{_ENVIRONMENT_ROOT} environment variable). Looked in:\n{searched}"
+        msg(
+            "zg_zozo_tree_missing",
+            env=_ENVIRONMENT_ROOT,
+            searched=searched,
+        )
     )
 
 
@@ -139,12 +142,12 @@ def describe_zozo_root() -> str:
     try:
         root = _zozo_root()
     except KitsukeError:
-        return "Not found. Zero GRAVITY cannot sew until this points at the checkout."
+        return msg("zg_prefs_not_found")
     try:
         _zozo_python(root)
     except KitsukeError as exc:
         return str(exc)
-    return f"Using {root}"
+    return msg("zg_prefs_using", root=root)
 
 
 def _zozo_python(root: Path) -> Path:
@@ -156,10 +159,7 @@ def _zozo_python(root: Path) -> Path:
     bundled = root / "build-win-native" / "python" / "python.exe"
     if bundled.is_file():
         return bundled
-    raise KitsukeError(
-        f"No ZOZO Python interpreter found under {root}. "
-        "Build the native Windows distribution there first."
-    )
+    raise KitsukeError(msg("zg_zozo_python_missing", root=root))
 
 
 def _cloth_geometry(parts: list[_PartRange]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -180,7 +180,7 @@ def _cloth_geometry(parts: list[_PartRange]) -> tuple[np.ndarray, np.ndarray, np
         triangles = np.empty((len(mesh.loop_triangles), 3), dtype=np.int64)
         mesh.loop_triangles.foreach_get("vertices", triangles.ravel())
         if not len(triangles):
-            raise KitsukeError(f"{part.obj.name} has no triangles to simulate.")
+            raise KitsukeError(msg("zg_no_triangles", name=part.obj.name))
         matrix = part.obj.matrix_world
         block = _world_vertices(part.obj)
         # A reflected Object transform reverses winding once the vertices
@@ -216,14 +216,11 @@ def _pattern_coordinates(part: _PartRange) -> np.ndarray:
         or attribute.data_type != "FLOAT_VECTOR"
         or len(attribute.data) != len(mesh.vertices)
     ):
-        raise KitsukeError(
-            f"{part.obj.name} has no valid pattern coordinates. "
-            "Load it again before Zero GRAVITY."
-        )
+        raise KitsukeError(msg("zg_pattern_missing", name=part.obj.name))
     block = np.empty((len(mesh.vertices), 3), dtype=np.float64)
     attribute.data.foreach_get("vector", block.ravel())
     if not np.all(np.isfinite(block)):
-        raise KitsukeError(f"{part.obj.name} has non-finite pattern coordinates.")
+        raise KitsukeError(msg("zg_pattern_nonfinite", name=part.obj.name))
     return block
 
 
@@ -234,13 +231,13 @@ def _validate(
     locked: np.ndarray,
 ) -> None:
     if not len(seams):
-        raise KitsukeError("There are no seams to sew.")
+        raise KitsukeError(msg("zg_no_seams"))
     if seams.min() < 0 or seams.max() >= len(positions):
-        raise KitsukeError("The sewing pairs do not match the current panel vertices.")
+        raise KitsukeError(msg("zg_seam_mismatch"))
     if not np.all(np.isfinite(positions)):
-        raise KitsukeError("The panels contain non-finite coordinates.")
+        raise KitsukeError(msg("zg_nonfinite_panels"))
     if np.all(locked == 1):
-        raise KitsukeError("Every panel is Locked; unlock at least one before sewing.")
+        raise KitsukeError(msg("zg_all_locked"))
 
 
 def _scatter(parts: list[_PartRange], positions: np.ndarray) -> None:
@@ -263,12 +260,12 @@ def sew_zero_gravity(
 ) -> str:
     """Sew every seam of the collection and write the result back to Blender."""
     if collection is None or collection.get("housei_role") != "clothes":
-        raise KitsukeError("No loaded Housei clothes collection is selected.")
+        raise KitsukeError(msg("zg_need_clothes"))
 
     root = _zozo_root()
     interpreter = _zozo_python(root)
 
-    parts = part_ranges(collection, "Zero GRAVITY")
+    parts = part_ranges(collection, "無重力着付")
     positions, faces, locked, pattern = _cloth_geometry(parts)
     seams = _seam_constraints_from_parts(collection, parts)
     _validate(parts, positions, seams, locked)
@@ -329,13 +326,9 @@ def sew_zero_gravity(
             report = json.loads(str(result["report"]))
 
     if sewn.shape != positions.shape:
-        raise KitsukeError(
-            "The solver returned a different vertex count than it was given."
-        )
+        raise KitsukeError(msg("zg_solver_vertex_count"))
     if not np.all(np.isfinite(sewn)):
-        raise KitsukeError(
-            "The solver returned a non-finite state; the cloth was left unchanged."
-        )
+        raise KitsukeError(msg("zg_solver_nonfinite"))
     # Sewing moves cloth a garment's width at most. A result that throws a
     # vertex far past the Body is not cloth, it is a rebuilt panel that failed
     # to locate one of its vertices, and writing it back would scatter the
@@ -346,19 +339,24 @@ def sew_zero_gravity(
     travelled = np.linalg.norm(sewn - positions, axis=1)
     if travelled.max() > body_size:
         raise KitsukeError(
-            f"The solver moved a vertex {travelled.max():.2f} m, further than the "
-            f"whole Body ({body_size:.2f} m), so the result was discarded and the "
-            "cloth left unchanged."
+            msg(
+                "zg_solver_travelled",
+                travelled=float(travelled.max()),
+                body_size=body_size,
+            )
         )
 
     _scatter(parts, sewn)
     context.view_layer.update()
-    return (
-        f"Zero GRAVITY: sewed {len(seams)} pairs across {len(parts)} panels "
-        f"in {report['frames_written']} frames ({report['solve_seconds']:.1f} s); "
-        f"seam gap mean {report['seam_gap_mean_mm']:.2f} mm, "
-        f"max {report['seam_gap_max_mm']:.2f} mm; "
-        f"last frame moved {report['residual_motion_mm']:.3f} mm"
+    return msg(
+        "zero_g_ok",
+        pairs=len(seams),
+        panels=len(parts),
+        frames=report["frames_written"],
+        seconds=float(report["solve_seconds"]),
+        gap_mean=float(report["seam_gap_mean_mm"]),
+        gap_max=float(report["seam_gap_max_mm"]),
+        residual=float(report["residual_motion_mm"]),
     )
 
 
@@ -380,7 +378,7 @@ def _failure_message(completed: subprocess.CompletedProcess) -> str:
             and "%|" not in line
         ]
         if informative:
-            return f"The ZOZO solver failed: {informative[-1]}"
+            return msg("zg_solver_failed_line", detail=informative[-1])
     for stream in (completed.stderr, completed.stdout):
         lines = [
             line.strip()
@@ -388,5 +386,5 @@ def _failure_message(completed: subprocess.CompletedProcess) -> str:
             if line.strip() and "%|" not in line
         ]
         if lines:
-            return f"The ZOZO solver failed: {lines[-1]}"
-    return f"The ZOZO solver failed with exit code {completed.returncode}."
+            return msg("zg_solver_failed_line", detail=lines[-1])
+    return msg("zg_solver_failed_code", code=completed.returncode)

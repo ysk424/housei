@@ -21,20 +21,21 @@ from bpy.types import (
     PropertyGroup,
 )
 
+from .hou import is_hou_part, sync_hou_from_object
 from .i18n import msg, translations_dict
 from .kitsuke import KitsukeError, adapt_seam_counts
 from . import ppf_zero_gravity
 from .ppf_zero_gravity import SETTLE_FRAMES, SEWING_FRAMES, sew_zero_gravity
 from .mesh_loader import (
-    LOCKED_OBJECT_KEY,
-    apply_auto_lock,
-    create_clothes_mesh,
+    CUT_OUT_Z_OFFSET_M,
+    apply_nonselected_fixed,
+    create_cuttingcloth_mesh,
     create_sewn_mesh,
-    mark_moved_parts_pending,
-    mark_pending_parts_done,
+    cut_out_parts_to_work,
+    ensure_work_collection,
+    hou_parts_in_collection,
     participating_parts,
     remove_sewn_preview,
-    update_clothes_mesh,
 )
 from .shell_isect_bridge import library_version
 from .zozo_handoff import ZOZO_MCP_PORT, ZozoHandoffError, prepare_for_zozo
@@ -109,114 +110,15 @@ def _selected_mesh_objects() -> list[Object]:
     return [obj for obj in bpy.context.selected_objects if obj.type == "MESH"]
 
 
-def _clothes_part_objects(collection: Collection | None) -> list[Object]:
+def _selected_hou_parts() -> list[Object]:
+    return [obj for obj in _selected_mesh_objects() if is_hou_part(obj)]
+
+
+def _hou_parts_selected_in_collection(collection: Collection | None) -> list[Object]:
     if collection is None:
         return []
-    return [
-        obj
-        for obj in collection.objects
-        if obj.type == "MESH" and obj.get("housei_role") == "part"
-    ]
-
-
-def _all_clothes_collections() -> list[Collection]:
-    return [
-        collection
-        for collection in bpy.data.collections
-        if collection.get("housei_role") == "clothes"
-    ]
-
-
-def _apply_auto_lock_all(properties) -> None:
-    for collection in _all_clothes_collections():
-        apply_auto_lock(collection, bool(properties.auto_lock))
-
-
-def _update_auto_lock(properties, _context) -> None:
-    # Existing Lock and Select Lock cannot both be on. Existing Lock wins here.
-    if bool(properties.auto_lock) and bool(getattr(properties, "select_lock_mode", False)):
-        properties.select_lock_mode = False
-    _apply_auto_lock_all(properties)
-
-
-def _update_select_lock_mode(properties, _context) -> None:
-    # Turning Select Lock on forces Existing Lock off (both-on is forbidden).
-    if bool(properties.select_lock_mode) and bool(properties.auto_lock):
-        properties.auto_lock = False
-        # auto_lock update already applied unlock of non-PLACED; re-assert selection
-        # locks after that if the mode is still on.
-    if bool(properties.select_lock_mode):
-        objects = _selected_mesh_objects()
-        parts = _lock_scope_parts(properties, objects)
-        targets = [obj for obj in objects if obj in parts]
-        for obj in targets:
-            obj[LOCKED_OBJECT_KEY] = True
-        if targets:
-            properties.parse_status = msg(
-                "select_lock_on_locked_update", n=len(targets)
-            )
-        else:
-            properties.parse_status = msg("select_lock_on_hint")
-    else:
-        properties.parse_status = msg("select_lock_off")
-
-
-def _lock_scope_collections(properties, objects: list[Object]) -> list[Collection]:
-    collections: list[Collection] = []
-    seen: set[str] = set()
-
-    def add(collection: Collection | None) -> None:
-        if collection is not None and collection.get("housei_role") == "clothes" and collection.name not in seen:
-            collections.append(collection)
-            seen.add(collection.name)
-
-    add(properties.clothes_collection)
-    for obj in objects:
-        collection_name = str(obj.get("housei_collection", ""))
-        add(bpy.data.collections.get(collection_name))
-    return collections
-
-
-def _lock_scope_parts(properties, objects: list[Object]) -> list[Object]:
-    scoped: list[Object] = []
-    seen: set[str] = set()
-    for collection in _lock_scope_collections(properties, objects):
-        for obj in _clothes_part_objects(collection):
-            if obj.name not in seen:
-                scoped.append(obj)
-                seen.add(obj.name)
-    return scoped
-
-
-def _selection_lock_targets(properties) -> list[Object]:
-    objects = _selected_mesh_objects()
-    parts = _lock_scope_parts(properties, objects)
-    return [obj for obj in objects if obj in parts]
-
-
-def _toggle_select_lock(properties) -> None:
-    """Toggle Select Lock mode. Mutually exclusive with Existing Lock when on."""
-    objects = _selected_mesh_objects()
-    targets = _selection_lock_targets(properties)
-    if not objects or not targets:
-        properties.parse_status = msg("select_lock_need_parts")
-        return
-    if properties.select_lock_mode:
-        # Mode off: unlock the current selection (same attribute as before).
-        properties.select_lock_mode = False
-        for obj in targets:
-            obj[LOCKED_OBJECT_KEY] = False
-        properties.parse_status = msg(
-            "select_lock_off_unlocked", n=len(targets)
-        )
-        return
-    # Mode on: Existing Lock must be off, then lock selection.
-    if properties.auto_lock:
-        properties.auto_lock = False
-    properties.select_lock_mode = True
-    for obj in targets:
-        obj[LOCKED_OBJECT_KEY] = True
-    properties.parse_status = msg("select_lock_on_locked", n=len(targets))
+    names = {obj.name for obj in hou_parts_in_collection(collection)}
+    return [obj for obj in _selected_hou_parts() if obj.name in names]
 
 
 def _parser_data_dir() -> str:
@@ -288,36 +190,18 @@ def _poll_svg_parser() -> float | None:
         with json_path.open("r", encoding="utf-8") as handle:
             document = json.load(handle)
         validated_document = _validate_loaded_json(document, svg_path)
-        scene = bpy.data.scenes.get(_parse_scene_name) if _parse_scene_name else None
-        if _parse_action == "UPDATE":
-            clothes_collection = bpy.data.collections.get(_parse_collection_name) if _parse_collection_name else None
-            sewing_changed, vertex_count = update_clothes_mesh(bpy.context, clothes_collection, validated_document)
-            message = msg(
-                "updated_mesh",
-                name=clothes_collection.name,
-                n=vertex_count,
+        cutting = create_cuttingcloth_mesh(bpy.context, validated_document)
+        part_count = sum(1 for obj in cutting.objects if is_hou_part(obj))
+        _set_parse_status(
+            msg(
+                "loaded_parts",
+                name=cutting.name,
+                n=part_count,
             )
-            if sewing_changed:
-                message += msg("updated_sewing_rebuild")
-            _set_parse_status(message)
-        else:
-            clothes_collection = create_clothes_mesh(bpy.context, validated_document)
-            if scene is not None and hasattr(scene, "housei"):
-                scene.housei.clothes_collection = clothes_collection
-                scene.housei.auto_lock = True
-                _apply_auto_lock_all(scene.housei)
-            part_count = sum(obj.get("housei_role") == "part" for obj in clothes_collection.objects)
-            _set_parse_status(
-                msg(
-                    "loaded_parts",
-                    name=clothes_collection.name,
-                    n=part_count,
-                )
-            )
+        )
         _loaded_pattern_json = validated_document
     except Exception as exc:
-        key = "update_failed" if _parse_action == "UPDATE" else "load_failed"
-        _set_parse_status(msg(key, exc=str(exc).strip()[:240]))
+        _set_parse_status(msg("load_failed", exc=str(exc).strip()[:240]))
     finally:
         _parse_process = None
         _parse_scene_name = None
@@ -532,7 +416,8 @@ class HouseiPreferences(AddonPreferences):
         layout = self.layout
         layout.prop(self, "ppf_root")
         resolved = ppf_zero_gravity.describe_zozo_root()
-        layout.label(text=resolved, icon="CHECKMARK" if "Using" in resolved else "ERROR")
+        ok = resolved.startswith("Using") or resolved.startswith("使用中")
+        layout.label(text=resolved, icon="CHECKMARK" if ok else "ERROR")
 
 
 class HouseiProperties(PropertyGroup):
@@ -550,7 +435,7 @@ class HouseiProperties(PropertyGroup):
     )
     clothes_collection: PointerProperty(
         name="Clothes",
-        description="Loaded Housei clothes collection used by GRAVITY",
+        description="Work collection for 裁断 copies and Zero GRAVITY (e.g. CLOTHES_001)",
         type=Collection,
     )
     body_object: PointerProperty(
@@ -558,20 +443,6 @@ class HouseiProperties(PropertyGroup):
         description="Fixed body mesh used for GRAVITY collision",
         type=Object,
         poll=_mesh_object_poll,
-    )
-    # Mode flag for the Select Lock button (pressed look). Independent of the
-    # per-part LOCKED_OBJECT_KEY; both-on with auto_lock is forbidden.
-    select_lock_mode: BoolProperty(
-        name="Select Lock",
-        description="Lock selected clothes parts; cannot be on together with Existing Lock",
-        default=False,
-        update=_update_select_lock_mode,
-    )
-    auto_lock: BoolProperty(
-        name="Existing Lock",
-        description="Lock PLACED and DONE parts; cannot be on together with Select Lock",
-        default=True,
-        update=_update_auto_lock,
     )
     shell_isect_include_body: BoolProperty(
         name="Shell-isect vs Body",
@@ -618,7 +489,10 @@ class HouseiProperties(PropertyGroup):
 class HOUSEI_OT_load_svg(Operator):
     bl_idname = "housei.load_svg"
     bl_label = "Load"
-    bl_description = "Parse the selected Illustrator PDF and load its Housei JSON"
+    bl_description = (
+        "Parse the selected Illustrator PDF into a CUTTINGCLOTH collection "
+        "with HOU on each part (data place, not the work collection)"
+    )
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -669,104 +543,82 @@ class HOUSEI_OT_load_svg(Operator):
         return {"FINISHED"}
 
 
-class HOUSEI_OT_update_svg(Operator):
-    bl_idname = "housei.update_svg"
-    bl_label = "Update"
-    bl_description = "Recut the selected Clothes collection from the saved PDF and transfer its current 3D placement"
+class HOUSEI_OT_cut_out(Operator):
+    bl_idname = "housei.cut_out"
+    bl_label = "Cut out"
+    bl_description = (
+        "Copy selected HOU parts into the Clothes work collection and lift "
+        f"them by {int(CUT_OUT_Z_OFFSET_M * 100)} cm on Z for easy placement"
+    )
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return context.mode == "OBJECT"
+
     def execute(self, context):
-        global _parse_process, _parse_scene_name, _parse_svg_path, _parse_action, _parse_collection_name
-        if _parse_process is not None and _parse_process.poll() is None:
-            self.report({"WARNING"}, msg("update_already"))
-            return {"CANCELLED"}
         props = context.scene.housei
-        collection = props.clothes_collection
-        if collection is None or collection.get("housei_role") != "clothes":
-            self.report({"ERROR"}, msg("update_need_clothes"))
-            return {"CANCELLED"}
-        raw_path = props.svg_path
-        if not raw_path:
-            self.report({"ERROR"}, msg("update_need_pdf"))
-            return {"CANCELLED"}
-        svg_path = str(Path(bpy.path.abspath(raw_path)).resolve())
-        if not os.path.isfile(svg_path) or Path(svg_path).suffix.lower() != ".pdf":
-            self.report({"ERROR"}, msg("update_need_pdf_file"))
-            return {"CANCELLED"}
-        source_path = str(Path(str(collection.get("housei_source_svg", ""))).resolve())
-        if os.path.normcase(svg_path) != os.path.normcase(source_path):
-            self.report({"ERROR"}, msg("update_same_pdf"))
-            return {"CANCELLED"}
-        parser_path = Path(__file__).with_name(_PARSER_FILENAME)
+        sources = _selected_hou_parts()
+        if not sources:
+            props.parse_status = msg("cut_need_hou")
+            return {"FINISHED"}
         try:
-            python_path = _bundled_python()
-            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            _parse_process = subprocess.Popen(
-                [python_path, str(parser_path), svg_path],
-                cwd=_parser_data_dir(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=creationflags,
-                env=_parser_environment(),
-            )
+            work = ensure_work_collection(context, props.clothes_collection)
+            props.clothes_collection = work
+            copies = cut_out_parts_to_work(context, work, sources)
         except Exception as exc:
-            self.report({"ERROR"}, msg("parser_start_failed", exc=exc))
+            message = str(exc).strip() or type(exc).__name__
+            props.parse_status = msg("cut_failed", exc=message[:240])
+            self.report({"ERROR"}, message)
             return {"CANCELLED"}
-        _parse_scene_name = context.scene.name
-        _parse_svg_path = svg_path
-        _parse_action = "UPDATE"
-        _parse_collection_name = collection.name
-        props.parse_status = msg("updating")
-        if not bpy.app.timers.is_registered(_poll_svg_parser):
-            bpy.app.timers.register(_poll_svg_parser, first_interval=0.2)
+        if not copies:
+            props.parse_status = msg("cut_need_hou")
+            return {"FINISHED"}
+        props.parse_status = msg(
+            "cut_done",
+            n=len(copies),
+            name=work.name,
+            cm=int(CUT_OUT_Z_OFFSET_M * 100),
+        )
+        self.report({"INFO"}, props.parse_status)
         return {"FINISHED"}
 
 
-def _prepare_sewing(context, collection) -> tuple[Object, ...]:
+def _prepare_sewing(context, collection) -> None:
     """Bring seams and the Sewing plan up to date before the solver runs."""
-    # Gather seams: recut any sewing seam whose two sides carry unequal
-    # vertex counts so they can pair 1:1.  This changes topology on the
-    # affected panels, so force a sewing rebuild below.
     if adapt_seam_counts(context, collection):
         collection["housei_sewing_verified"] = False
 
-    pending_parts = mark_moved_parts_pending(collection)
-    sewing_required = bool(pending_parts) or not bool(
-        collection.get("housei_sewing_verified", False)
-    )
-    if sewing_required:
-        if not pending_parts and len(participating_parts(collection)) < 2:
-            raise KitsukeError(msg("zero_g_need_parts"))
-        # Each new pending stage gets sewing connections from its current
-        # Object Mode placement.  Completed parts remain in the plan as
-        # locked anchors when Auto is on.  A changed Update signature also
-        # rebuilds from completed participants so the hidden Sewing action
-        # is never required for recovery.
+    parts = participating_parts(collection)
+    if len(parts) < 2:
+        raise KitsukeError(msg("zero_g_need_parts"))
+    if not bool(collection.get("housei_sewing_verified", False)):
         remove_sewn_preview(collection, reveal_parts=True)
         collection["housei_sewing_verified"] = False
         create_sewn_mesh(context, collection)
-    return pending_parts
 
 
 def _run_zero_gravity(operator: Operator, context):
-    """Sew every seam in one contact-solver job."""
+    """Sew with non-selected fixed (same pin as old Existing Lock / DONE)."""
     props = context.scene.housei
     collection = props.clothes_collection
-    pending_parts: tuple[Object, ...] = ()
     try:
         if collection is None or collection.get("housei_role") != "clothes":
             raise KitsukeError(msg("zero_g_need_clothes"))
+        free = _hou_parts_selected_in_collection(collection)
+        if not free:
+            # Nothing selected in the work collection: no-op (easy to notice).
+            props.parse_status = msg("zero_g_noop")
+            return {"FINISHED"}
         if props.body_object is None:
             raise KitsukeError(msg("zero_g_need_body"))
 
-        pending_parts = _prepare_sewing(context, collection)
+        apply_nonselected_fixed(collection, free)
+        _prepare_sewing(context, collection)
         remove_sewn_preview(collection, reveal_parts=True)
         message = sew_zero_gravity(context, collection, props.body_object)
-        mark_pending_parts_done(pending_parts)
+        for obj in hou_parts_in_collection(collection):
+            sync_hou_from_object(obj)
     except Exception as exc:
         message = str(exc).strip() or type(exc).__name__
         props.parse_status = msg("zero_g_failed", exc=message[:240])
@@ -781,10 +633,10 @@ class HOUSEI_OT_kitsuke_zero_gravity(Operator):
     bl_idname = "housei.kitsuke_zero_gravity"
     bl_label = "Zero GRAVITY"
     bl_description = (
-        "Run automatic Sewing, then close every seam with the ZOZO Contact "
-        f"Solver in one job ({SEWING_FRAMES} frames sewing, {SETTLE_FRAMES} "
-        "settling; no gravity, static Body). Takes seconds, not a frame. "
-        "Sews from the flat panels, so pressing it again re-sews"
+        "Sew the Clothes work collection: selected HOU parts deform, "
+        "non-selected HOU parts stay fixed anchors (same pin as the old "
+        f"Existing Lock). One ZOZO job ({SEWING_FRAMES}+{SETTLE_FRAMES} frames). "
+        "Does nothing when nothing is selected in the work collection"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -942,18 +794,10 @@ class HOUSEI_PT_main(Panel):
         inputs.prop(props, "svg_path")
         inputs.prop(props, "clothes_collection")
         inputs.prop(props, "body_object")
-        lock_row = inputs.row(align=True)
-        # Select Lock: operator button (toggle look via depress).
-        lock_row.operator(
-            HOUSEI_OT_lock_selection.bl_idname,
-            text="Select Lock",
-            depress=bool(props.select_lock_mode),
-        )
-        lock_row.prop(props, "auto_lock", text="Existing Lock", toggle=True)
         layout.separator(factor=0.4)
         actions = layout.column(align=True)
         actions.operator(HOUSEI_OT_load_svg.bl_idname, text="Load")
-        actions.operator(HOUSEI_OT_update_svg.bl_idname, text="Update")
+        actions.operator(HOUSEI_OT_cut_out.bl_idname, text="Cut out")
         actions.operator(HOUSEI_OT_kitsuke_zero_gravity.bl_idname, text="Zero GRAVITY")
         # Body export Z band sits directly above Prepare for ZOZO.
         body_band = actions.box()
@@ -967,32 +811,11 @@ class HOUSEI_PT_main(Panel):
         _draw_status_box(layout, props)
 
 
-class HOUSEI_OT_lock_selection(Operator):
-    bl_idname = "housei.lock_selection"
-    bl_label = "Select Lock"
-    bl_description = (
-        "Lock or unlock selected clothes parts. "
-        "Cannot be on together with Existing Lock"
-    )
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context):
-        return context.mode == "OBJECT"
-
-    def execute(self, context):
-        props = context.scene.housei
-        _toggle_select_lock(props)
-        self.report({"INFO"}, props.parse_status)
-        return {"FINISHED"}
-
-
 _classes = (
     HouseiPreferences,
     HouseiProperties,
     HOUSEI_OT_load_svg,
-    HOUSEI_OT_update_svg,
-    HOUSEI_OT_lock_selection,
+    HOUSEI_OT_cut_out,
     HOUSEI_OT_kitsuke_zero_gravity,
     HOUSEI_OT_prepare_zozo,
     HOUSEI_PT_main,

@@ -21,6 +21,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix
 
+from .i18n import msg
 from .mesh_loader import (
     LOCKED_OBJECT_KEY,
     SewingError,
@@ -80,14 +81,13 @@ def part_ranges(collection: bpy.types.Collection, purpose: str) -> list[_PartRan
     """
     objects = list(participating_parts(collection))
     if len(objects) < 2:
-        raise KitsukeError(f"{purpose} needs at least two pending or completed parts.")
+        raise KitsukeError(msg("kitsuke_need_two_parts", purpose=purpose))
     ranges: list[_PartRange] = []
     offset = 0
     for obj in objects:
         if any(abs(float(scale) - 1.0) > 1.0e-5 for scale in obj.scale):
             raise KitsukeError(
-                f"Apply Scale on {obj.name} before {purpose}; "
-                "moving and rotating are supported, scaling is not."
+                msg("kitsuke_apply_scale", name=obj.name, purpose=purpose)
             )
         count = len(obj.data.vertices)
         locked = bool(obj.get(LOCKED_OBJECT_KEY, False))
@@ -100,25 +100,23 @@ def _seam_constraints_from_parts(
     collection: bpy.types.Collection, part_ranges: list[_PartRange]
 ) -> np.ndarray:
     if not bool(collection.get("housei_sewing_verified", False)):
-        raise KitsukeError("Automatic Sewing is required before a solver can run.")
+        raise KitsukeError(msg("kitsuke_sewing_required"))
     try:
         plan = build_sewing_plan(collection)
     except SewingError as exc:
-        raise KitsukeError(f"Automatic Sewing failed: {exc}") from exc
+        raise KitsukeError(msg("kitsuke_sewing_failed", exc=str(exc))) from exc
     expected = [part.obj.name for part in part_ranges]
     if [part.name for part in plan.parts] != expected:
-        raise KitsukeError(
-            "Automatic Sewing failed: the verified panel set no longer matches the current objects."
-        )
+        raise KitsukeError(msg("kitsuke_sewing_mismatch"))
     return np.asarray([(a, b) for _label, a, b in plan.connections], dtype=np.int32).reshape((-1, 2))
 
 
 def _body_snapshot(context, body: bpy.types.Object) -> _BodySnapshot:
     if body is None:
-        raise KitsukeError("Select a mesh Body first.")
+        raise KitsukeError(msg("kitsuke_need_body"))
     if body.type != "MESH":
         raise KitsukeError(
-            f"Body '{body.name}' is {body.type}, not MESH. Select the character's actual skin mesh."
+            msg("kitsuke_body_not_mesh", name=body.name, type=body.type)
         )
     depsgraph = context.evaluated_depsgraph_get()
     evaluated = body.evaluated_get(depsgraph)
@@ -136,7 +134,7 @@ def _body_snapshot(context, body: bpy.types.Object) -> _BodySnapshot:
     finally:
         evaluated.to_mesh_clear()
     if not len(vertices) or not len(faces):
-        raise KitsukeError("Body has no triangles for collision detection.")
+        raise KitsukeError(msg("kitsuke_body_no_tris"))
     return _BodySnapshot(
         vertices,
         faces,

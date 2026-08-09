@@ -684,7 +684,7 @@ def prepare_for_zozo(
         context.view_layer.update()
 
     try:
-        ranges = part_ranges(collection, "Prepare for ZOZO")
+        ranges = part_ranges(collection, "ZOZO用準備作業")
         seams = _seam_constraints_from_parts(collection, ranges)
     except KitsukeError as exc:
         raise ZozoHandoffError(str(exc)) from exc

@@ -25,36 +25,35 @@ names, seam layout, or visual similarity.
 
 ## Workflow
 
+A **part** is any mesh with a non-empty `HOU` string custom property (JSON).
+Collection membership is not required. `CUTTINGCLOTH_NNN` is only a convenient
+place for Load; `Clothes` is the **work collection** (e.g. tops vs skirt later).
+
 The N-panel contains these inputs:
 
-- `Pattern Path`: the Illustrator PDF;
-- `Clothes`: the loaded Housei collection;
+- `Pattern Path`: the Illustrator PDF (Load still available while load is in-tree);
+- `Clothes`: work collection for 裁断 / Zero GRAVITY / ZOZO export;
 - `Body`: the fixed collision mesh the solver collides cloth against.
 
 The normal operation order is:
 
-1. `Load` creates one Mesh object per pattern panel instance and turns
-   `Existing Lock` on.
-2. Translate and rotate the separate parts in Object Mode.
-3. Select the Body, then press `Zero GRAVITY`. Housei runs Sewing
-   automatically immediately before the solve.
-4. Continue placement and press `Zero GRAVITY` again.
-5. Use `Update` after editing the same Illustrator PDF.
-6. For ZOZO simulation, start the ZOZO MCP server on port 9633 and use
-   `Prepare for ZOZO` to create an animation hand-off.
+1. `Load` creates HOU parts under a new `CUTTINGCLOTH_NNN` data collection.
+2. Select HOU part(s) (anywhere) and press **Cut out** (`裁断`): copies go into
+   the Clothes work collection and are lifted **Z + 30 cm** for easy grabbing.
+   Clothes is created if missing.
+3. Place the copies in Object Mode.
+4. Select the Body. Select the parts that should **deform** this press, then
+   press `Zero GRAVITY`. Non-selected HOU parts in Clothes stay **fixed
+   anchors** (same pin as the old Existing Lock / DONE path). Nothing selected
+   in Clothes → immediate no-op.
+5. Delete unwanted copies from Clothes and cut out again if needed.
+6. For ZOZO simulation, use `Prepare for ZOZO` on the Clothes collection.
 
-Every part has two independent attributes: the monotonic `PLACED` -> `PENDING`
--> `DONE` state and one deformation Lock. Moving a `PLACED` part makes it
-`PENDING` at the next Zero GRAVITY press and unlocks it; a successful press changes
-its state to `DONE` without changing that Lock. It therefore remains deformable
-for repeated Zero GRAVITY presses.
+**Removed:** Update, Select Lock, Existing Lock, and PLACED/PENDING/DONE state
+driving. Incremental sewing is **非選択固定** (selection free, others locked).
 
-Load turns **Existing Lock** on and locks `PLACED` and existing `DONE` parts;
-pending parts stay unlocked. Turning Existing Lock off unlocks every
-non-placed part; turning it on applies that rule again. A `PLACED` part
-remains outside the simulation. **Select Lock** is a button that locks or
-unlocks the selected clothes parts (same deformation Lock attribute). Existing
-Lock and Select Lock cannot both be on; both may be off.
+Part metadata lives in the object custom property **`HOU`** (one JSON string,
+including base64 NPY blocks). See `HOU_DESIGN.md`.
 
 ## Interface language
 

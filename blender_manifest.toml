@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "housei"
-version = "0.1.0"
+version = "0.2.1"
 name = "Housei"
 tagline = "縫製: Japanese pattern-based clothing construction"
 maintainer = "Yoshihiko Tsukamoto"
@@ -27,6 +27,7 @@ paths = [
     "__init__.py",
     "ui.py",
     "i18n.py",
+    "hou.py",
     "kitsuke.py",
     "ppf_zero_gravity.py",
     "ppf_driver.py",
@@ -38,6 +39,7 @@ paths = [
     "mesh_loader.py",
     "housei_svg_parser.py",
     "SVG_TO_JSON_SPEC.md",
+    "HOU_DESIGN.md",
     "KITSUKE_DESIGN.md",
     "PPF_ZERO_GRAVITY_DESIGN.md",
     "ZOZO_HANDOFF_DESIGN.md",

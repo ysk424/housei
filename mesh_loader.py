@@ -14,6 +14,8 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.geometry import barycentric_transform, delaunay_2d_cdt
 
+from .i18n import msg
+
 
 # How far a sleeve's two RING edges stand apart before they are sewn. Wide
 # enough that an arm goes in and that the two sides are plainly separate
@@ -68,6 +70,7 @@ PANEL_GAP_M = 0.10
 WORLD_Y_M = -1.0
 BOTTOM_Z_M = 0.01
 COLLECTION_PREFIX = "CLOTHES_"
+CUTTING_PREFIX = "CUTTINGCLOTH_"
 GRAINLINE_EDGE_FAMILY_ATTRIBUTE = "housei_grainline_family"
 GRAINLINE_FACE_QUAD_ATTRIBUTE = "housei_grainline_quad"
 GRAINLINE_EDGE_PROXY = 0
@@ -76,6 +79,8 @@ GRAINLINE_EDGE_WEFT = 2
 GRAINLINE_EDGE_TRANSITION = 3
 LOAD_MATRIX_KEY = "housei_load_matrix"
 LOCKED_OBJECT_KEY = "housei_kitsuke_locked"
+# World-Z lift applied by 裁断 so new copies are easy to grab.
+CUT_OUT_Z_OFFSET_M = 0.30
 GRAVITY_STATE_KEY = "housei_gravity_state"
 GRAVITY_STATE_PLACED = "PLACED"
 GRAVITY_STATE_PENDING = "PENDING"
@@ -139,61 +144,66 @@ def part_gravity_state(obj: bpy.types.Object) -> str:
 
 
 def mark_moved_parts_pending(collection: bpy.types.Collection | None) -> tuple[bpy.types.Object, ...]:
-    """Advance moved placement-state parts to pending and return all pending parts."""
-    if collection is None:
-        return ()
-    pending: list[bpy.types.Object] = []
-    for obj in collection.objects:
-        if obj.type != "MESH" or obj.get("housei_role") != "part":
-            continue
-        state = part_gravity_state(obj)
-        if state == GRAVITY_STATE_PLACED and part_moved_from_load(obj):
-            state = GRAVITY_STATE_PENDING
-            obj[GRAVITY_STATE_KEY] = state
-        if state == GRAVITY_STATE_PENDING:
-            # Lock is an independent deformation attribute.  The GRAVITY event
-            # explicitly unlocks every pending part without deriving future
-            # lock values from its state.
-            obj[LOCKED_OBJECT_KEY] = False
-            pending.append(obj)
-    return tuple(sorted(pending, key=lambda obj: int(obj.get("housei_panel_index", 0))))
+    """Legacy no-op kept for import compatibility. Selection drives free/fixed now."""
+    del collection
+    return ()
 
 
 def mark_pending_parts_done(parts: Iterable[bpy.types.Object]) -> None:
-    """Advance successfully simulated pending parts to the terminal done state."""
-    for obj in parts:
-        if part_gravity_state(obj) == GRAVITY_STATE_PENDING:
-            obj[GRAVITY_STATE_KEY] = GRAVITY_STATE_DONE
+    """Legacy no-op kept for import compatibility."""
+    del parts
 
 
 def apply_auto_lock(collection: bpy.types.Collection | None, enabled: bool) -> None:
-    """Apply the explicit Auto-button lock operation without changing states."""
+    """Legacy no-op; Existing Lock UI was removed (非選択固定 replaces it)."""
+    del collection, enabled
+
+
+def hou_parts_in_collection(collection: bpy.types.Collection | None) -> tuple[bpy.types.Object, ...]:
+    """HOU-bearing mesh parts linked to the collection, stable panel order."""
+    from .hou import is_hou_part
+
     if collection is None:
-        return
-    for obj in collection.objects:
-        if obj.type != "MESH" or obj.get("housei_role") != "part":
-            continue
-        state = part_gravity_state(obj)
-        if enabled:
-            obj[LOCKED_OBJECT_KEY] = state in (GRAVITY_STATE_PLACED, GRAVITY_STATE_DONE)
-        elif state != GRAVITY_STATE_PLACED:
-            obj[LOCKED_OBJECT_KEY] = False
-
-
-def participating_parts(collection: bpy.types.Collection) -> tuple[bpy.types.Object, ...]:
-    """Return pending parts and completed parts retained as sewing anchors."""
+        return ()
     return tuple(sorted(
         (
             obj
             for obj in collection.objects
-            if (
-                obj.type == "MESH"
-                and obj.get("housei_role") == "part"
-                and part_gravity_state(obj) != GRAVITY_STATE_PLACED
-            )
+            if is_hou_part(obj)
         ),
-        key=lambda obj: int(obj.get("housei_panel_index", 0)),
+        key=lambda obj: (
+            int(obj.get("housei_panel_index", 0)),
+            obj.name,
+        ),
     ))
+
+
+def apply_nonselected_fixed(
+    collection: bpy.types.Collection,
+    selected: Iterable[bpy.types.Object],
+) -> tuple[tuple[bpy.types.Object, ...], tuple[bpy.types.Object, ...]]:
+    """Mirror the old Existing Lock + DONE/PENDING split without states.
+
+    Selected HOU parts in the work collection deform (unlocked). Non-selected
+    HOU parts stay deformation-locked anchors — the same ``LOCKED_OBJECT_KEY``
+    pin the ZOZO hand-off already used for Existing Lock / DONE parts.
+    """
+    selected_names = {obj.name for obj in selected}
+    free: list[bpy.types.Object] = []
+    fixed: list[bpy.types.Object] = []
+    for obj in hou_parts_in_collection(collection):
+        if obj.name in selected_names:
+            obj[LOCKED_OBJECT_KEY] = False
+            free.append(obj)
+        else:
+            obj[LOCKED_OBJECT_KEY] = True
+            fixed.append(obj)
+    return tuple(free), tuple(fixed)
+
+
+def participating_parts(collection: bpy.types.Collection) -> tuple[bpy.types.Object, ...]:
+    """All HOU parts in the work collection (selected free + non-selected fixed)."""
+    return hou_parts_in_collection(collection)
 
 
 @dataclass(frozen=True)
@@ -1307,11 +1317,38 @@ def _pack_panels(panels: list[PanelGeometry], gap: float) -> None:
         cursor += max_x - min_x + gap
 
 
-def _next_clothes_name() -> str:
+def _next_prefixed_name(prefix: str) -> str:
     index = 1
-    while f"{COLLECTION_PREFIX}{index:03d}" in bpy.data.collections or f"{COLLECTION_PREFIX}{index:03d}" in bpy.data.objects:
+    while (
+        f"{prefix}{index:03d}" in bpy.data.collections
+        or f"{prefix}{index:03d}" in bpy.data.objects
+    ):
         index += 1
-    return f"{COLLECTION_PREFIX}{index:03d}"
+    return f"{prefix}{index:03d}"
+
+
+def _next_clothes_name() -> str:
+    return _next_prefixed_name(COLLECTION_PREFIX)
+
+
+def _next_cutting_name() -> str:
+    return _next_prefixed_name(CUTTING_PREFIX)
+
+
+def ensure_work_collection(
+    context,
+    collection: bpy.types.Collection | None,
+) -> bpy.types.Collection:
+    """Return a clothes work collection, creating CLOTHES_NNN when needed."""
+    if collection is not None and collection.get("housei_role") == "clothes":
+        return collection
+    name = _next_clothes_name()
+    created = bpy.data.collections.new(name)
+    context.scene.collection.children.link(created)
+    created["housei_schema"] = "housei-pattern/1.0.0"
+    created["housei_role"] = "clothes"
+    created["housei_sewing_verified"] = False
+    return created
 
 
 def _set_boolean_edge_attribute(mesh: bpy.types.Mesh, name: str, edge_indices: Iterable[int]) -> None:
@@ -1441,8 +1478,10 @@ def _sewing_signature(document: dict[str, Any]) -> str:
     )
 
 
-def create_clothes_mesh(context, document: dict[str, Any]) -> bpy.types.Collection:
-    """Create one editable Blender object per expanded pattern panel."""
+def create_cuttingcloth_mesh(context, document: dict[str, Any]) -> bpy.types.Collection:
+    """Load pattern panels into a new CUTTINGCLOTH_NNN data collection with HOU."""
+    from .hou import sync_hou_from_object
+
     if document.get("schema") != "housei-pattern" or document.get("version") != "1.0.0":
         raise MeshLoadError("Unsupported Housei JSON schema.")
     if document.get("units") != "m":
@@ -1457,9 +1496,10 @@ def create_clothes_mesh(context, document: dict[str, Any]) -> bpy.types.Collecti
     panels = _panel_geometries(panels_json)
     _pack_panels(panels, PANEL_GAP_M)
 
-    name = _next_clothes_name()
+    name = _next_cutting_name()
     collection = bpy.data.collections.new(name)
     created_objects: list[bpy.types.Object] = []
+    sewing_groups = document.get("sewing_groups") or {}
     try:
         context.scene.collection.children.link(collection)
         for panel_index, panel in enumerate(panels):
@@ -1492,18 +1532,23 @@ def create_clothes_mesh(context, document: dict[str, Any]) -> bpy.types.Collecti
             obj["housei_panel_index"] = panel_index
             obj["housei_mirror_side"] = panel.mirror_side
             obj["housei_ring_closed"] = panel.ring_closed
+            obj[LOCKED_OBJECT_KEY] = False
 
         collection["housei_schema"] = "housei-pattern/1.0.0"
-        collection["housei_role"] = "clothes"
+        collection["housei_role"] = "cutting"
         collection["housei_source_svg"] = str(source.get("svg_path", ""))
         collection["housei_sewing_signature"] = _sewing_signature(document)
-        collection["housei_sewing_verified"] = False
         _store_document(collection, document)
         context.view_layer.update()
         for obj in created_objects:
             obj[LOAD_MATRIX_KEY] = list(_matrix_tuple(obj.matrix_world))
-            obj[GRAVITY_STATE_KEY] = GRAVITY_STATE_PLACED
-            obj[LOCKED_OBJECT_KEY] = True
+            sync_hou_from_object(
+                obj,
+                extra={
+                    "source_collection_role": "cutting",
+                    "sewing_groups": sewing_groups,
+                },
+            )
 
         for selected in context.selected_objects:
             selected.select_set(False)
@@ -1522,21 +1567,89 @@ def create_clothes_mesh(context, document: dict[str, Any]) -> bpy.types.Collecti
         raise
 
 
+def create_clothes_mesh(context, document: dict[str, Any]) -> bpy.types.Collection:
+    """Compatibility alias: Load creates a cutting-cloth data collection."""
+    return create_cuttingcloth_mesh(context, document)
+
+
+def cut_out_parts_to_work(
+    context,
+    work: bpy.types.Collection,
+    sources: Iterable[bpy.types.Object],
+    *,
+    z_offset_m: float = CUT_OUT_Z_OFFSET_M,
+) -> tuple[bpy.types.Object, ...]:
+    """Copy HOU parts into the work collection and lift them for placement.
+
+    Source objects are left unchanged. Copies keep mesh data, custom props, and
+    HOU; sewing on the work collection is marked dirty.
+    """
+    from .hou import is_hou_part, sync_hou_from_object
+
+    if work.get("housei_role") != "clothes":
+        raise MeshLoadError(msg("cut_need_clothes_role"))
+    copies: list[bpy.types.Object] = []
+    source_list = list(sources)
+    for source in source_list:
+        if not is_hou_part(source):
+            continue
+        # Avoid linking the same mesh datablock twice; each cut-out is independent.
+        new_obj = source.copy()
+        new_obj.data = source.data.copy()
+        # Unlink from any collections Blender attached on copy, then own work only.
+        for coll in list(new_obj.users_collection):
+            coll.objects.unlink(new_obj)
+        work.objects.link(new_obj)
+        new_obj.location = new_obj.location.copy()
+        new_obj.location.z += float(z_offset_m)
+        new_obj["housei_role"] = "part"
+        new_obj["housei_collection"] = work.name
+        new_obj[LOCKED_OBJECT_KEY] = False
+        sync_hou_from_object(
+            new_obj,
+            extra={
+                "source_object": source.name,
+                "work_collection": work.name,
+            },
+        )
+        copies.append(new_obj)
+    if not copies:
+        return ()
+    work["housei_sewing_verified"] = False
+    # Prefer a stored pattern document so multi-panel sewing groups know which
+    # partners are still missing (SODE/ERI etc.). First available source wins.
+    if not _stored_document(work):
+        for source in source_list:
+            for coll in source.users_collection:
+                document = _stored_document(coll)
+                if document is not None:
+                    _store_document(work, document)
+                    work["housei_source_svg"] = coll.get(
+                        "housei_source_svg", work.get("housei_source_svg", "")
+                    )
+                    break
+            if _stored_document(work):
+                break
+    context.view_layer.update()
+    for selected in list(context.selected_objects):
+        selected.select_set(False)
+    for obj in copies:
+        obj.select_set(True)
+    context.view_layer.objects.active = copies[0]
+    return tuple(copies)
+
+
 def _pattern_positions(obj: bpy.types.Object) -> list[Vector]:
     attribute = obj.data.attributes.get("housei_pattern_position")
     if attribute is None or attribute.domain != "POINT" or len(attribute.data) != len(obj.data.vertices):
-        raise UpdateError(
-            f"{obj.name} has no original pattern coordinates. Load it again with the current Housei version."
-        )
+        raise UpdateError(msg("remesh_pattern_missing", name=obj.name))
     return [Vector((item.vector[0], item.vector[1])) for item in attribute.data]
 
 
 def _construction_positions(obj: bpy.types.Object) -> list[Vector]:
     attribute = obj.data.attributes.get("housei_construction_position")
     if attribute is None or attribute.domain != "POINT" or len(attribute.data) != len(obj.data.vertices):
-        raise UpdateError(
-            f"{obj.name} has no construction coordinates. Load it again with the current Housei version."
-        )
+        raise UpdateError(msg("remesh_construction_missing", name=obj.name))
     return [Vector(item.vector) for item in attribute.data]
 
 
@@ -1814,7 +1927,7 @@ def _raw_seam_chains(obj: bpy.types.Object, label: str) -> list[_SeamChain]:
             if valid_rest else (mesh.vertices[a].co - mesh.vertices[b].co).length
         )
     if any(len(neighbors) > 2 for neighbors in adjacency.values()):
-        raise SewingError(f"Sewing group {label} branches on {obj.name}.")
+        raise SewingError(msg("sew_branches", label=label, name=obj.name))
 
     chains: list[_SeamChain] = []
     remaining = set(adjacency)
@@ -1831,10 +1944,10 @@ def _raw_seam_chains(obj: bpy.types.Object, label: str) -> list[_SeamChain]:
         endpoints = sorted(vertex for vertex in component if len(adjacency[vertex]) == 1)
         closed = not endpoints
         if not closed and len(endpoints) != 2:
-            raise SewingError(f"Sewing group {label} is not a continuous path on {obj.name}.")
+            raise SewingError(msg("sew_not_continuous", label=label, name=obj.name))
         if closed:
             if any(len(adjacency[vertex]) != 2 for vertex in component):
-                raise SewingError(f"Sewing group {label} is not a simple closed path on {obj.name}.")
+                raise SewingError(msg("sew_not_simple_closed", label=label, name=obj.name))
             start = min(component)
             ordered = [start]
             previous = None
@@ -1848,11 +1961,11 @@ def _raw_seam_chains(obj: bpy.types.Object, label: str) -> list[_SeamChain]:
                 if following == start:
                     break
                 if following in ordered:
-                    raise SewingError(f"Cannot order closed sewing group {label} on {obj.name}.")
+                    raise SewingError(msg("sew_cannot_order_closed", label=label, name=obj.name))
                 ordered.append(following)
                 previous, current = current, following
             if set(ordered) != component:
-                raise SewingError(f"Cannot order closed sewing group {label} on {obj.name}.")
+                raise SewingError(msg("sew_cannot_order_closed", label=label, name=obj.name))
         else:
             ordered = [endpoints[0]]
             previous = None
@@ -1860,7 +1973,7 @@ def _raw_seam_chains(obj: bpy.types.Object, label: str) -> list[_SeamChain]:
             while current != endpoints[1]:
                 candidates = adjacency[current] - ({previous} if previous is not None else set())
                 if len(candidates) != 1:
-                    raise SewingError(f"Cannot order sewing group {label} on {obj.name}.")
+                    raise SewingError(msg("sew_cannot_order", label=label, name=obj.name))
                 following = next(iter(candidates))
                 ordered.append(following)
                 previous, current = current, following
@@ -1875,7 +1988,7 @@ def _raw_seam_chains(obj: bpy.types.Object, label: str) -> list[_SeamChain]:
 
 def _direction_cost(left: _SeamChain, right: _SeamChain, reverse: bool) -> float:
     if left.closed or right.closed:
-        raise SewingError("Closed sewing paths require circular matching.")
+        raise SewingError(msg("sew_closed_need_circular"))
     right_start = right.world_points[-1] if reverse else right.world_points[0]
     right_end = right.world_points[0] if reverse else right.world_points[-1]
     return (left.world_points[0] - right_start).length + (left.world_points[-1] - right_end).length
@@ -1883,9 +1996,9 @@ def _direction_cost(left: _SeamChain, right: _SeamChain, reverse: bool) -> float
 
 def _pair_chains(left: list[_SeamChain], right: list[_SeamChain], label: str) -> list[tuple[_SeamChain, _SeamChain]]:
     if len(left) != len(right):
-        raise SewingError(f"Sewing group {label} has different numbers of continuous paths on its two parts.")
+        raise SewingError(msg("sew_path_count_diff", label=label))
     if len(left) > 8:
-        raise SewingError(f"Sewing group {label} has too many separate paths for automatic pairing.")
+        raise SewingError(msg("sew_too_many_paths", label=label))
     candidates: list[tuple[float, tuple[int, ...]]] = []
     for order in permutations(range(len(right))):
         cost = 0.0
@@ -1895,7 +2008,7 @@ def _pair_chains(left: list[_SeamChain], right: list[_SeamChain], label: str) ->
         candidates.append((cost, order))
     candidates.sort(key=lambda item: item[0])
     if len(candidates) > 1 and abs(candidates[1][0] - candidates[0][0]) <= 1.0e-6:
-        raise SewingError(f"Sewing group {label} has an ambiguous path pairing; move the parts closer to their intended seams.")
+        raise SewingError(msg("sew_ambiguous_pair", label=label))
     return [(left_chain, right[right_index]) for left_chain, right_index in zip(left, candidates[0][1])]
 
 
@@ -1905,17 +2018,17 @@ def _cumulative_positions(edge_lengths: tuple[float, ...], vertex_count: int, cl
         distances.append(distances[-1] + length)
     total = sum(edge_lengths) if closed else distances[-1]
     if total <= 1.0e-10:
-        raise SewingError("A sewing path has zero length.")
+        raise SewingError(msg("sew_zero_length"))
     return [distance / total for distance in distances]
 
 
 def _ordered_vertex_pairs(left: _SeamChain, right: _SeamChain, label: str) -> list[tuple[int, int]]:
     if left.closed or right.closed:
-        raise SewingError(f"Sewing group {label} mixes unsupported open and closed paths.")
+        raise SewingError(msg("sew_mixed_open_closed", label=label))
     forward_cost = _direction_cost(left, right, False)
     reverse_cost = _direction_cost(left, right, True)
     if abs(forward_cost - reverse_cost) <= 1.0e-6:
-        raise SewingError(f"Sewing direction for group {label} is ambiguous; move the parts closer to their intended seams.")
+        raise SewingError(msg("sew_direction_ambiguous", label=label))
     right_vertices = list(right.vertices)
     right_points = right.world_points
     right_lengths = right.edge_lengths
@@ -1958,7 +2071,7 @@ class _GlobalSeamPath:
 
 def _closure_cost(first: _SeamChain, second: _SeamChain, reverse_second: bool) -> float:
     if first.closed or second.closed:
-        raise SewingError("Only open paths can be joined into a composite sewing loop.")
+        raise SewingError(msg("sew_open_only_composite"))
     second_start = second.world_points[-1] if reverse_second else second.world_points[0]
     second_end = second.world_points[0] if reverse_second else second.world_points[-1]
     return (
@@ -2054,7 +2167,7 @@ def _circular_alignment(
             if best is None or cost < best[0]:
                 best = (cost, pairs)
     if best is None:
-        raise SewingError("Cannot align closed sewing paths.")
+        raise SewingError(msg("sew_cannot_align_closed"))
     return best
 
 
@@ -2070,9 +2183,7 @@ def _multipart_closed_pairs(
         if any(not chain.closed for chain in chains)
     }
     if not closed or len(open_by_object) != 2:
-        raise SewingError(
-            f"Sewing group {label} needs closed RING paths and open paths on exactly two body parts."
-        )
+        raise SewingError(msg("sew_ring_need_body", label=label))
     count = len(closed)
     first_obj, second_obj = sorted(open_by_object, key=lambda obj: int(obj.get("housei_panel_index", 0)))
     first = open_by_object[first_obj]
@@ -2092,9 +2203,7 @@ def _multipart_closed_pairs(
         partial_assignments.sort(key=lambda item: item[0])
         return partial_assignments[0][1]
     if len(first) != count or len(second) != count or count > 8:
-        raise SewingError(
-            f"Sewing group {label} cannot pair its {count} closed path(s) with the body paths."
-        )
+        raise SewingError(msg("sew_ring_cannot_pair", label=label, count=count))
 
     body_candidates: list[tuple[float, tuple[int, ...]]] = []
     for order in permutations(range(count)):
@@ -2131,21 +2240,64 @@ class SewingPlan:
     connections: tuple[tuple[str, int, int], ...]
 
 
+def _part_panel_id(obj: bpy.types.Object) -> str:
+    return str(obj.get("housei_panel_id", obj.name))
+
+
+def _present_panel_ids(parts: Iterable[bpy.types.Object]) -> set[str]:
+    return {_part_panel_id(obj) for obj in parts}
+
+
+def _authored_sewing_panel_ids(
+    collection: bpy.types.Collection, label: str
+) -> set[str] | None:
+    """Panel ids the pattern JSON lists for this sewing letter, or None if unknown.
+
+    Used so partial 裁断 (e.g. OMOTE+URA without SODE/ERI) does not invent
+    body-to-body seams for labels that still wait on missing partners.
+    """
+    document = _stored_document(collection)
+    if document is None:
+        return None
+    groups = document.get("sewing_groups")
+    if not isinstance(groups, dict):
+        return None
+    refs = groups.get(label)
+    if not isinstance(refs, list) or not refs:
+        return None
+    panels: set[str] = set()
+    for ref in refs:
+        if isinstance(ref, dict) and ref.get("panel") is not None:
+            panels.add(str(ref["panel"]))
+    return panels or None
+
+
+def _sewing_label_partners_ready(
+    collection: bpy.types.Collection,
+    label: str,
+    present_panels: set[str],
+) -> bool:
+    """False when the authored group still needs panels not in the work set."""
+    required = _authored_sewing_panel_ids(collection, label)
+    if required is None:
+        return True
+    return required.issubset(present_panels)
+
+
 def build_sewing_plan(collection: bpy.types.Collection) -> SewingPlan:
     """Validate and return reusable global-index sewing connections for separate parts."""
     if collection is None or collection.get("housei_role") != "clothes":
-        raise SewingError("No loaded Housei clothes collection is selected.")
+        raise SewingError(msg("sew_need_clothes"))
     parts = participating_parts(collection)
     if len(parts) < 2:
-        raise SewingError(
-            "GRAVITY needs at least two pending or completed parts with a resolvable sewing connection."
-        )
+        raise SewingError(msg("sew_need_two_parts"))
     all_parts = tuple(
         obj
         for obj in collection.objects
         if obj.type == "MESH" and obj.get("housei_role") == "part"
     )
     active = set(parts)
+    present_panels = _present_panel_ids(parts)
     labels_by_part = {obj: _sewing_labels(obj.data) for obj in all_parts}
     active_labels = tuple(sorted(set().union(*(labels_by_part[obj] for obj in parts))))
 
@@ -2158,6 +2310,11 @@ def build_sewing_plan(collection: bpy.types.Collection) -> SewingPlan:
     spring_keys: set[tuple[int, int]] = set()
     resolved_labels: list[str] = []
     for label in active_labels:
+        # Incomplete multi-panel groups (sleeve/collar not yet 裁断): skip.
+        # Otherwise C/D would sew OMOTE–URA armhole/neck to each other and
+        # collide with side-seam springs A/B at shared endpoints.
+        if not _sewing_label_partners_ready(collection, label, present_panels):
+            continue
         by_object = {obj: chains for obj in parts if (chains := _seam_chains(obj, label))}
         inactive = [
             obj for obj in all_parts
@@ -2190,10 +2347,7 @@ def build_sewing_plan(collection: bpy.types.Collection) -> SewingPlan:
                 ]
             else:
                 if len(by_object) != 2:
-                    raise SewingError(
-                        f"Sewing group {label} must occur on exactly two different "
-                        "cloth parts, or twice on one part to close it onto itself."
-                    )
+                    raise SewingError(msg("sew_group_two_parts", label=label))
                 first_obj, second_obj = sorted(
                     by_object, key=lambda obj: int(obj.get("housei_panel_index", 0))
                 )
@@ -2214,13 +2368,12 @@ def build_sewing_plan(collection: bpy.types.Collection) -> SewingPlan:
         for a, b in pairs:
             key = _edge_key(a, b)
             if key in spring_keys:
-                raise SewingError("Two sewing groups produce the same sewing spring.")
+                # Adjacent labels share junction vertices; one spring is enough.
+                continue
             spring_keys.add(key)
             connections.append((label, a, b))
     if not resolved_labels:
-        raise SewingError(
-            "The pending parts and their completed sewing anchors contain no resolvable sewing group yet."
-        )
+        raise SewingError(msg("sew_no_group_yet"))
     return SewingPlan(parts, tuple(resolved_labels), tuple(connections))
 
 
@@ -2292,7 +2445,12 @@ def compute_seam_count_overrides(
             return False
         return any(vertex in folds for chain in chains for vertex in chain.vertices)
 
+    present_panels = _present_panel_ids(parts)
     for label in sorted(labels):
+        # Same gate as build_sewing_plan: do not recut armholes/necks against
+        # each other when the sleeve/collar panel is not in the work collection.
+        if not _sewing_label_partners_ready(collection, label, present_panels):
+            continue
         by_obj: dict[bpy.types.Object, list[_SeamChain]] = {}
         for obj in parts:
             chains = _seam_chains(obj, label)
@@ -2301,6 +2459,7 @@ def compute_seam_count_overrides(
         if len(by_obj) < 2:
             continue
         closed_objs = {
+
             obj: chains for obj, chains in by_obj.items()
             if any(chain.closed for chain in chains)
         }
@@ -2449,27 +2608,25 @@ def _replace_part_meshes(
     """
     document = _stored_document(collection)
     if document is None:
-        raise UpdateError(
-            "This clothes collection has no stored pattern; press Update once to "
-            "recut it from the saved PDF, then run GRAVITY again."
-        )
+        raise UpdateError(msg("remesh_no_document"))
     panels_json = document.get("panels")
     if not isinstance(panels_json, list) or not panels_json:
-        raise UpdateError("The stored pattern has no panels.")
+        raise UpdateError(msg("remesh_no_panels"))
     parts = sorted(
         (obj for obj in collection.objects if obj.type == "MESH" and obj.get("housei_role") == "part"),
         key=lambda obj: int(obj.get("housei_panel_index", 0)),
     )
+    # Full pattern may list more panels than this work collection holds
+    # (subset 裁断 is normal). Remesh only the instances that are present.
     panels = _panel_geometries(panels_json, overrides)
-    if len(parts) != len(panels):
-        raise UpdateError(f"Stored panel count {len(panels)} does not match {len(parts)} parts.")
     old_by_instance = {
         str(obj.get("housei_panel_instance", obj.get("housei_panel_label", ""))): obj
         for obj in parts
     }
     new_by_instance = {panel.instance_id: panel for panel in panels}
-    if set(old_by_instance) != set(new_by_instance):
-        raise UpdateError("The stored pattern no longer matches the current parts; press Update first.")
+    missing = sorted(set(old_by_instance) - set(new_by_instance))
+    if missing:
+        raise UpdateError(msg("remesh_missing_instances", shown=", ".join(missing[:8])))
 
     prepared: list[tuple[bpy.types.Object, bpy.types.Mesh, PanelGeometry]] = []
     try:
@@ -2497,6 +2654,8 @@ def _replace_part_meshes(
                 bpy.data.meshes.remove(mesh)
         raise
 
+    from .hou import is_hou_part, sync_hou_from_object
+
     changed: set[str] = set()
     old_meshes: list[bpy.types.Mesh] = []
     for obj, mesh, panel in prepared:
@@ -2504,6 +2663,8 @@ def _replace_part_meshes(
         obj.data = mesh
         obj["housei_mesh_spacing_m"] = panel.spacing_m
         obj[CUT_SCHEME_KEY] = CUT_SCHEME
+        if is_hou_part(obj) or obj.get("housei_role") == "part":
+            sync_hou_from_object(obj)
         changed.add(obj.name)
     if changed:
         remove_sewn_preview(collection)
@@ -2520,9 +2681,9 @@ def create_sewn_mesh(
 ) -> bpy.types.Object:
     """Merge positioned source parts and add loose sewing-spring edges."""
     if collection is None or collection.get("housei_role") != "clothes":
-        raise SewingError("No loaded Housei clothes collection is selected.")
+        raise SewingError(msg("sew_need_clothes"))
     if any(obj.get("housei_role") == "sewn" for obj in collection.objects):
-        raise SewingError(f"{collection.name} already has a sewn mesh.")
+        raise SewingError(msg("sew_already_sewn", name=collection.name))
     context.view_layer.update()
     plan = build_sewing_plan(collection)
     parts = list(plan.parts)

@@ -21,12 +21,9 @@ translations_dict = {
         ("*", "Housei"): "縫製",
         ("*", "Inputs"): "入力",
         ("*", "Message"): "メッセージ",
-        ("*", "Pattern Path"): "型紙",
         ("*", "Clothes"): "衣服",
         ("*", "Body"): "ボディ",
         ("*", "Status"): "状態",
-        ("Operator", "Load"): "読み込み",
-        ("*", "Load"): "読み込み",
         ("Operator", "Cut out"): "裁断",
         ("*", "Cut out"): "裁断",
         ("Operator", "Zero GRAVITY"): "無重力着付",
@@ -41,7 +38,6 @@ translations_dict = {
         ("*", "Shell-isect vs Body"): "ボディとの交差検査",
         ("*", "ZOZO Contact Solver"): "ZOZO Contact Solver",
         ("*", "Ready"): "準備完了",
-        ("*", "Loading..."): "読み込み中...",
     }
 }
 
@@ -60,14 +56,6 @@ def is_japanese() -> bool:
 # Dynamic status / soft-error templates. Keys are stable English ids.
 _STATUS_EN: dict[str, str] = {
     "ready": "Ready",
-    "loading": "Loading...",
-    "load_already": "A pattern is already being loaded.",
-    "load_need_pdf": "Select a PDF pattern file first.",
-    "load_need_pdf_file": "Pattern Path must point to an existing .pdf file.",
-    "parser_missing": "Parser program is missing: {name}",
-    "parser_start_failed": "Could not start pattern parser: {exc}",
-    "load_failed": "Load failed: {exc}",
-    "loaded_parts": "Loaded {name}: {n} HOU part(s)",
     "cut_need_hou": "Select HOU part(s) before Cut out.",
     "cut_failed": "Cut out failed: {exc}",
     "cut_done": "Cut out: copied {n} part(s) to {name} (Z+{cm} cm)",
@@ -266,14 +254,6 @@ _STATUS_EN: dict[str, str] = {
 
 _STATUS_JA: dict[str, str] = {
     "ready": "準備完了",
-    "loading": "読み込み中...",
-    "load_already": "別の型紙を読み込み中です。",
-    "load_need_pdf": "先に PDF 型紙ファイルを指定してください。",
-    "load_need_pdf_file": "型紙パスは存在する .pdf ファイルを指す必要があります。",
-    "parser_missing": "パーサが見つかりません: {name}",
-    "parser_start_failed": "型紙パーサを起動できませんでした: {exc}",
-    "load_failed": "読み込み失敗: {exc}",
-    "loaded_parts": "読み込み完了 {name}: HOU パーツ {n}",
     "cut_need_hou": "裁断の前に HOU 付きパーツを選択してください。",
     "cut_failed": "裁断失敗: {exc}",
     "cut_done": "裁断: {n} パーツを {name} にコピー（Z+{cm} cm）",

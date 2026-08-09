@@ -1,8 +1,10 @@
 # 縫製 (Housei)
 
-Housei（縫製）は、型紙ベースの衣服を組み立て・段階着付するための実験的な
-Blender 拡張です。Illustrator の型紙が正本であり、Blender メッシュは置き換え
-可能な物理的実体です。
+Housei（縫製）は、**HOU 付き型紙パーツ**を裁断・段階着付し、ZOZO へ渡すための
+実験的な Blender 拡張です。Blender メッシュは置き換え可能な物理的実体です。
+
+**PDF の読み込みは行いません。** 型紙の供給は **Katagami（型紙）**、MCP、または
+`HOU_DESIGN.md` に従う他ツールの役割です。
 
 **Housei は yohsai（洋裁）とは独立した日本語版プロダクト**です。識別子・
 データ属性・JSON schema はすべて `housei` 名前空間に属し、yohsai とデータ
@@ -19,72 +21,40 @@ names, seam layout, or visual similarity.
 2. **ドキュメントは英語でもよい** — 設計メモや README の技術記述は英語で
    よい。用語の正は日本語メッセージと型紙注釈の契約にある。
 3. **明示コマンドのみ意味を持つ** — パーツ名、縫い目レイアウト、見た目の
-   類似から衣服部位や配置を推測しない（yohsai と同じ契約）。
-4. **独立リポジトリ** — yohsai からのコピーを起点とするが、履歴・リモート・
-   パッケージ ID は別物。併存インストール可能（`id = "housei"`）。
+   類似から衣服部位や配置を推測しない。
+4. **型紙供給は外部分担** — Katagami / MCP / HOU 契約を満たす任意の作成器。
+5. **独立リポジトリ** — `id = "housei"`。Katagami と併存インストール可能。
 
 ## Workflow
 
 A **part** is any mesh with a non-empty `HOU` string custom property (JSON).
-Collection membership is not required. `CUTTINGCLOTH_NNN` is only a convenient
-place for Load; `Clothes` is the **work collection** (e.g. tops vs skirt later).
+Collection membership is not required. `Clothes` is the **work collection**.
 
-The N-panel contains these inputs:
+The N-panel contains:
 
-- `Pattern Path`: the Illustrator PDF (Load still available while load is in-tree);
 - `Clothes`: work collection for 裁断 / Zero GRAVITY / ZOZO export;
 - `Body`: the fixed collision mesh the solver collides cloth against.
 
-The normal operation order is:
+Typical order:
 
-1. `Load` creates HOU parts under a new `CUTTINGCLOTH_NNN` data collection.
-2. Select HOU part(s) (anywhere) and press **Cut out** (`裁断`): copies go into
-   the Clothes work collection and are lifted **Z + 30 cm** for easy grabbing.
-   Clothes is created if missing.
+1. Create HOU parts with **Katagami** (PDF) or MCP / other tool (`HOU_DESIGN.md`).
+2. Select HOU part(s) and press **Cut out** (`裁断`): copies go into Clothes and
+   are lifted **Z + 30 cm**. Clothes is created if missing.
 3. Place the copies in Object Mode.
-4. Select the Body. Select the parts that should **deform** this press, then
-   press `Zero GRAVITY`. Non-selected HOU parts in Clothes stay **fixed
-   anchors** (same pin as the old Existing Lock / DONE path). Nothing selected
-   in Clothes → immediate no-op.
+4. Select the Body. Select parts that should **deform**, then press
+   `Zero GRAVITY` (**非選択固定**). Nothing selected in Clothes → no-op.
 5. Delete unwanted copies from Clothes and cut out again if needed.
-6. For ZOZO simulation, use `Prepare for ZOZO` on the Clothes collection.
+6. Optional: `Prepare for ZOZO` on the Clothes collection.
 
-**Removed:** Update, Select Lock, Existing Lock, and PLACED/PENDING/DONE state
-driving. Incremental sewing is **非選択固定** (selection free, others locked).
-
-Part metadata lives in the object custom property **`HOU`** (one JSON string,
-including base64 NPY blocks). See `HOU_DESIGN.md`.
+Part metadata: object custom property **`HOU`**. See `HOU_DESIGN.md`.
+Pattern PDF contract for external loaders: `SVG_TO_JSON_SPEC.md` (reference).
 
 ## Interface language
 
 - **Message box**: always Japanese (author-written). See `i18n.msg`.
 - **Panel labels**: English identifiers, with Japanese translations via
-  `bpy.app.translations` when Blender's interface language is Japanese
-  (`Edit > Preferences > Interface > Translation` → Japanese, enable
-  Interface). Product name: Housei → 縫製.
-- This README keeps English operator names (`Load`, `Zero GRAVITY`, …) as
-  stable identifiers; Japanese UI labels are in `i18n.translations_dict`.
-
-## Pattern input
-
-The parser accepts a one-page Illustrator PDF. Each closed panel must contain a
-unique `#` label. Page vertical is warp and page horizontal is weft.
-Illustrator layer and sublayer names are ignored; standard PDF page content is
-read as one flattened drawing. A PDF text object whose first non-whitespace
-characters are `//` is a comment and is ignored in full.
-
-Supported annotations are:
-
-- a single letter for a sewing group;
-- `@W` for a fold edge;
-- `@M` for authored-left and mirrored-right instances;
-- two `RING` edges plus `@TOP` for a welded ring construction.
-
-No undocumented annotation has implied behavior.
-
-Load samples a uniform triangular lattice at a 5 mm pitch in pattern-page
-coordinates and uses its triangles as the Blender and collision proxy. Pattern
-coordinates retain the material rest state.
+  `bpy.app.translations` when Blender's interface language is Japanese.
+  Product name: Housei → 縫製.
 
 ## Automatic Sewing
 

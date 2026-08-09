@@ -1,15 +1,15 @@
 # Housei Development Notes
 
 Status: independent Japanese product (縫製), started from a yohsai 0.14.7
-source snapshot. Package version is `0.2.1` under `id = "housei"`. Not binary-
-or data-compatible with yohsai.
+source snapshot. Package version is `0.3.0` under `id = "housei"`. Not binary-
+or data-compatible with yohsai. PDF load lives in **Katagami**, not here.
 
 ## Architecture
 
 - A part is any mesh with `HOU` (JSON string custom property). Stateless: HOU
   holds metadata + base64 NPY payloads; no PLACED/PENDING/DONE machine.
-- Load writes `CUTTINGCLOTH_NNN` (role `cutting`) with HOU on each panel.
-  Cut out (`裁断`) copies selected HOU parts into the Clothes work collection
+- Pattern supply is external (Katagami PDF, MCP, etc.). Housei starts at
+  Cut out (`裁断`): copies selected HOU parts into the Clothes work collection
   (role `clothes`) and lifts Z by 0.30 m.
 - Zero GRAVITY: selection in Clothes deforms; non-selected HOU parts pin via
   `housei_kitsuke_locked` (same pin path as the old Existing Lock / DONE).

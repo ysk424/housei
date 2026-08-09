@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""縫製 (Housei): Japanese pattern construction, dressing, and garment tools."""
+"""縫製 (Housei): cut out, Zero GRAVITY dressing, and ZOZO hand-off for HOU parts."""
 
 from __future__ import annotations
 

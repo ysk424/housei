@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "housei"
-version = "0.2.1"
+version = "0.3.0"
 name = "Housei"
-tagline = "縫製: Japanese pattern-based clothing construction"
+tagline = "縫製: Cut out, Zero GRAVITY, ZOZO (HOU parts from Katagami/MCP)"
 maintainer = "Yoshihiko Tsukamoto"
 type = "add-on"
 
@@ -14,12 +14,8 @@ license = ["SPDX:GPL-3.0-or-later"]
 
 tags = ["Modeling", "Pipeline"]
 
-wheels = [
-    "./wheels/pypdf-6.14.2-py3-none-any.whl",
-]
-
 [permissions]
-files = "Load pattern PDF and write Housei JSON"
+files = "Write temporary ZOZO MCP configuration for localhost hand-off"
 network = "Configure ZOZO Contact Solver through its localhost MCP server"
 
 [build]
@@ -37,7 +33,6 @@ paths = [
     "zozo_mcp_client.py",
     "shell_isect_bridge.py",
     "mesh_loader.py",
-    "housei_svg_parser.py",
     "SVG_TO_JSON_SPEC.md",
     "HOU_DESIGN.md",
     "KITSUKE_DESIGN.md",

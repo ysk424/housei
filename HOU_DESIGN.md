@@ -111,8 +111,10 @@ Parallel sources that still exist on the object (not a second public API):
 
 ## Workflow contract
 
-1. **Load** — builds meshes, writes `housei_*` + mesh attributes, then
-   `sync_hou_from_object` (including `sewing_groups` from the pattern JSON).
+1. **External load** (Katagami, MCP, …) — builds meshes, writes `housei_*` +
+   mesh attributes, then `HOU` / `sync_hou_from_object` (including
+   `sewing_groups` from the pattern JSON when available). Housei does not
+   load PDF.
 2. **Cut out (裁断)** — deep-copies selected HOU parts into the Clothes work
    collection, lifts Z by 30 cm, rewrites HOU with `source_object` /
    `work_collection`. Source objects are unchanged.

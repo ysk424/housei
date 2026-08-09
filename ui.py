@@ -29,7 +29,6 @@ from .ppf_zero_gravity import SETTLE_FRAMES, SEWING_FRAMES, sew_zero_gravity
 from .mesh_loader import (
     CUT_OUT_Z_OFFSET_M,
     apply_nonselected_fixed,
-    create_cuttingcloth_mesh,
     create_sewn_mesh,
     cut_out_parts_to_work,
     ensure_work_collection,
@@ -41,17 +40,9 @@ from .shell_isect_bridge import library_version
 from .zozo_handoff import ZOZO_MCP_PORT, ZozoHandoffError, prepare_for_zozo
 
 
-_parse_process: subprocess.Popen[str] | None = None
-_parse_scene_name: str | None = None
-_parse_svg_path: str | None = None
-_parse_action: str | None = None
-_parse_collection_name: str | None = None
-_loaded_pattern_json: dict | None = None
 _zozo_process: subprocess.Popen[str] | None = None
 _zozo_scene_name: str | None = None
 _zozo_prepared_summary: str | None = None
-_PARSER_FILENAME = "housei_svg_parser.py"
-_JSON_FILENAME = "housei_pattern.json"
 _ZOZO_CLIENT_FILENAME = "zozo_mcp_client.py"
 _ZOZO_CONFIG_FILENAME = "zozo_mcp_config.json"
 
@@ -121,7 +112,7 @@ def _hou_parts_selected_in_collection(collection: Collection | None) -> list[Obj
     return [obj for obj in _selected_hou_parts() if obj.name in names]
 
 
-def _parser_data_dir() -> str:
+def _housei_data_dir() -> str:
     return bpy.utils.user_resource("DATAFILES", path="housei", create=True)
 
 
@@ -138,7 +129,7 @@ def _bundled_python() -> str:
     raise FileNotFoundError("Blender's bundled Python executable was not found.")
 
 
-def _parser_environment() -> dict[str, str]:
+def _subprocess_environment() -> dict[str, str]:
     environment = os.environ.copy()
     inherited_paths = [path for path in sys.path if isinstance(path, str) and path]
     existing = environment.get("PYTHONPATH")
@@ -146,69 +137,6 @@ def _parser_environment() -> dict[str, str]:
         inherited_paths.append(existing)
     environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(inherited_paths))
     return environment
-
-
-def _set_parse_status(message: str) -> None:
-    if _parse_scene_name:
-        scene = bpy.data.scenes.get(_parse_scene_name)
-        if scene is not None and hasattr(scene, "housei"):
-            scene.housei.parse_status = message
-
-
-def _validate_loaded_json(document: object, svg_path: str) -> dict:
-    if not isinstance(document, dict):
-        raise ValueError("Parser output is not a JSON object.")
-    if document.get("schema") != "housei-pattern" or document.get("version") != "1.0.0":
-        raise ValueError("Parser output has an unsupported schema or version.")
-    if document.get("units") != "m":
-        raise ValueError("Parser output does not use meters.")
-    source = document.get("source")
-    if not isinstance(source, dict) or Path(str(source.get("svg_path", ""))).resolve() != Path(svg_path).resolve():
-        raise ValueError("Parser output belongs to a different pattern file.")
-    if not isinstance(document.get("panels"), list):
-        raise ValueError("Parser output has no panels array.")
-    return document
-
-
-def _poll_svg_parser() -> float | None:
-    global _parse_process, _parse_scene_name, _parse_svg_path, _parse_action, _parse_collection_name, _loaded_pattern_json
-    process = _parse_process
-    if process is None:
-        return None
-    if process.poll() is None:
-        return 0.2
-
-    stdout, stderr = process.communicate()
-    svg_path = _parse_svg_path
-    try:
-        if process.returncode != 0:
-            diagnostic = stderr.strip() or stdout.strip() or f"Parser exited with code {process.returncode}."
-            raise RuntimeError(diagnostic)
-        if not svg_path:
-            raise RuntimeError("The parser input path was lost.")
-        json_path = Path(_parser_data_dir()) / _JSON_FILENAME
-        with json_path.open("r", encoding="utf-8") as handle:
-            document = json.load(handle)
-        validated_document = _validate_loaded_json(document, svg_path)
-        cutting = create_cuttingcloth_mesh(bpy.context, validated_document)
-        part_count = sum(1 for obj in cutting.objects if is_hou_part(obj))
-        _set_parse_status(
-            msg(
-                "loaded_parts",
-                name=cutting.name,
-                n=part_count,
-            )
-        )
-        _loaded_pattern_json = validated_document
-    except Exception as exc:
-        _set_parse_status(msg("load_failed", exc=str(exc).strip()[:240]))
-    finally:
-        _parse_process = None
-        _parse_scene_name = None
-        _parse_svg_path = None
-        _parse_action = None
-        _parse_collection_name = None
-    return None
 
 
 def _set_zozo_status(message: str) -> None:
@@ -421,12 +349,6 @@ class HouseiPreferences(AddonPreferences):
 
 
 class HouseiProperties(PropertyGroup):
-    svg_path: StringProperty(
-        name="Pattern Path",
-        description="Adobe Illustrator PDF pattern file",
-        subtype="FILE_PATH",
-        default="",
-    )
     parse_status: StringProperty(
         name="Status",
         description="Status and warnings (panel message area only; not operator error icons)",
@@ -484,63 +406,6 @@ class HouseiProperties(PropertyGroup):
         step=10,
         precision=1,
     )
-
-
-class HOUSEI_OT_load_svg(Operator):
-    bl_idname = "housei.load_svg"
-    bl_label = "Load"
-    bl_description = (
-        "Parse the selected Illustrator PDF into a CUTTINGCLOTH collection "
-        "with HOU on each part (data place, not the work collection)"
-    )
-    bl_options = {"REGISTER"}
-
-    def execute(self, context):
-        global _parse_process, _parse_scene_name, _parse_svg_path, _parse_action, _parse_collection_name
-        if _parse_process is not None and _parse_process.poll() is None:
-            self.report({"WARNING"}, msg("load_already"))
-            return {"CANCELLED"}
-
-        raw_path = context.scene.housei.svg_path
-        if not raw_path:
-            self.report({"ERROR"}, msg("load_need_pdf"))
-            return {"CANCELLED"}
-        svg_path = str(Path(bpy.path.abspath(raw_path)).resolve())
-        if not os.path.isfile(svg_path) or Path(svg_path).suffix.lower() != ".pdf":
-            self.report({"ERROR"}, msg("load_need_pdf_file"))
-            return {"CANCELLED"}
-
-        parser_path = Path(__file__).with_name(_PARSER_FILENAME)
-        if not parser_path.is_file():
-            self.report({"ERROR"}, msg("parser_missing", name=_PARSER_FILENAME))
-            return {"CANCELLED"}
-        try:
-            python_path = _bundled_python()
-            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            _parse_process = subprocess.Popen(
-                [python_path, str(parser_path), svg_path],
-                cwd=_parser_data_dir(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=creationflags,
-                env=_parser_environment(),
-            )
-        except Exception as exc:
-            self.report({"ERROR"}, msg("parser_start_failed", exc=exc))
-            return {"CANCELLED"}
-
-        _parse_scene_name = context.scene.name
-        _parse_svg_path = svg_path
-        _parse_action = "LOAD"
-        _parse_collection_name = None
-        context.scene.housei.parse_status = msg("loading")
-        if not bpy.app.timers.is_registered(_poll_svg_parser):
-            bpy.app.timers.register(_poll_svg_parser, first_interval=0.2)
-        return {"FINISHED"}
 
 
 class HOUSEI_OT_cut_out(Operator):
@@ -739,7 +604,7 @@ class HOUSEI_OT_prepare_zozo(Operator):
             mcp_port, mcp_note = _ensure_zozo_mcp_server(ZOZO_MCP_PORT)
             config = prepared.mcp_configuration(context.scene)
             config["port"] = int(mcp_port)
-            config_path = Path(_parser_data_dir()) / _ZOZO_CONFIG_FILENAME
+            config_path = Path(_housei_data_dir()) / _ZOZO_CONFIG_FILENAME
             config_path.write_text(
                 json.dumps(config, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -754,7 +619,7 @@ class HOUSEI_OT_prepare_zozo(Operator):
                 encoding="utf-8",
                 errors="replace",
                 creationflags=creationflags,
-                env=_parser_environment(),
+                env=_subprocess_environment(),
             )
             _zozo_scene_name = context.scene.name
             _zozo_prepared_summary = summary
@@ -791,12 +656,10 @@ class HOUSEI_PT_main(Panel):
         layout.separator(factor=0.4)
         inputs = layout.column(align=True)
         inputs.label(text="Inputs")
-        inputs.prop(props, "svg_path")
         inputs.prop(props, "clothes_collection")
         inputs.prop(props, "body_object")
         layout.separator(factor=0.4)
         actions = layout.column(align=True)
-        actions.operator(HOUSEI_OT_load_svg.bl_idname, text="Load")
         actions.operator(HOUSEI_OT_cut_out.bl_idname, text="Cut out")
         actions.operator(HOUSEI_OT_kitsuke_zero_gravity.bl_idname, text="Zero GRAVITY")
         # Body export Z band sits directly above Prepare for ZOZO.
@@ -814,7 +677,6 @@ class HOUSEI_PT_main(Panel):
 _classes = (
     HouseiPreferences,
     HouseiProperties,
-    HOUSEI_OT_load_svg,
     HOUSEI_OT_cut_out,
     HOUSEI_OT_kitsuke_zero_gravity,
     HOUSEI_OT_prepare_zozo,
@@ -832,8 +694,6 @@ def register():
 def unregister():
     global _zozo_process, _zozo_scene_name, _zozo_prepared_summary
     bpy.app.translations.unregister(__package__)
-    if bpy.app.timers.is_registered(_poll_svg_parser):
-        bpy.app.timers.unregister(_poll_svg_parser)
     if bpy.app.timers.is_registered(_poll_zozo_mcp):
         bpy.app.timers.unregister(_poll_zozo_mcp)
     if _zozo_process is not None and _zozo_process.poll() is None:

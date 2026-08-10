@@ -131,7 +131,7 @@ what the message suggests:
 | | cloth × cloth | cloth × Body |
 | --- | ---: | ---: |
 | the cloth Blender holds | 4 | 52 |
-| after `ppf_remesh` rebuilt it | 0 | **338** |
+| after `remesh` rebuilt it | 0 | **338** |
 
 Every counted pair is cloth against the Body. 306 of the 338 are on the front
 panel — which had **none** before the rebuild touched it — and 32 on the back.
@@ -140,7 +140,7 @@ panels it was not even for.
 
 ## A barrier solver only promises its own mesh
 
-`ppf_remesh` kept a panel's outline and replaced its interior with a fresh
+`remesh` kept a panel's outline and replaced its interior with a fresh
 lattice, reading each new point off the original triangles. That reads a point
 that is *on* the surface, so on a flat panel it is exact to the last bit — and a
 panel is flat exactly once, when it is loaded. Sewing curves it. The new
@@ -186,7 +186,7 @@ into something this solver can advance.
 
 So the rebuild stays, and what it does wrong is undone instead:
 
-**The scene is cleared before it is built.** `ppf_clear` asks the same checker
+**The scene is cleared before it is built.** `clear` asks the same checker
 which triangles the rebuild pushed into the Body and lifts those vertices back
 out along the Body's own normal, to 1.5 mm. On the reference garment that is 36
 of 8780 vertices, 1.51 mm at the worst, in one pass — and the scene then builds
@@ -220,8 +220,8 @@ pairs to 14.
 ## What is not finished
 
 **The garment's own triangulation is still the thing that wants fixing.**
-`ppf_remesh` exists because the solve cannot run on the garment's mesh, and
-`ppf_clear` exists because `ppf_remesh` moves cloth. Fix the triangulation where
+`remesh` exists because the solve cannot run on the garment's mesh, and
+`clear` exists because `remesh` moves cloth. Fix the triangulation where
 it is produced — a panel meshed with no needle and no coincident pair — and both
 go, along with the read-back's 0.20 mm and every question about whether the mesh
 the solver promises is the mesh Blender has. The measurements above say what
@@ -242,7 +242,7 @@ a copy of the operator's cloth rather than their cloth. The clearing means a
 press no longer trips over what the last one left, so it no longer compounds
 into a refusal, but it is a treadmill rather than a fix.
 
-**Clearing edits the rest shape.** The vertices `ppf_clear` lifts are lifted
+**Clearing edits the rest shape.** The vertices `clear` lifts are lifted
 before the solve, so the cloth is told it was cut with a 1.5 mm bump there. It
 is small against a seam about to move tens of millimetres, and it is confined to
 cloth the rebuild had already displaced, but it is not nothing and it is not

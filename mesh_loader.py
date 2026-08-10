@@ -600,7 +600,7 @@ def _interior_grid(
     """An equilateral triangular lattice covering the panel.
 
     A triangular (row-offset) lattice rather than a square one, for the same
-    reason `ppf_remesh` uses it: its Delaunay triangulation is already
+    reason `backends/ppf/remesh.py` uses it: its Delaunay triangulation is already
     equilateral, so every interior triangle comes out the same size and shape,
     and there is no diagonal direction for a drape to crease along. Nothing
     special happens near a sewing edge any more -- the seam neighbourhood is

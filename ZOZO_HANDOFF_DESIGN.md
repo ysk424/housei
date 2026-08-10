@@ -65,10 +65,10 @@ one triangle contributes a term around 1e14 into an fp32 device reduction, and
 the assembled matrix comes back with a NaN. Every frame after that is a frame
 the operator waited for and did not get.
 
-`ppf_remesh` has said this since it was written — "a sliver contributes a term
+`backends/ppf/remesh.py` has said this since it was written — "a sliver contributes a term
 of order 1e11, and the assembled matrix comes back with a NaN that stops the
 very first PCG solve" — and it repairs exactly this. But it runs in the ZOZO
-tree's interpreter beside `ppf_driver`, inside the Zero GRAVITY solve. The
+tree's interpreter beside its driver, inside the Zero GRAVITY solve. The
 hand-off never passed through it, so the one path that knew how to fix the
 problem was the one path that did not run.
 

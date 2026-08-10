@@ -47,7 +47,7 @@ nothing used.
 ## What replaced it
 
 One uniform equilateral triangular lattice per panel (`_interior_grid`), the
-same construction `ppf_remesh` uses, because its Delaunay triangulation is
+same construction `backends/ppf/remesh.py` uses, because its Delaunay triangulation is
 already near-equilateral:
 
 - rows √3/2 · pitch apart, alternate rows offset half a pitch, anchored to the

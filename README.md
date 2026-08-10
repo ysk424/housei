@@ -59,15 +59,13 @@ Pattern PDF contract for external loaders: `SVG_TO_JSON_SPEC.md` (reference).
 ## Automatic Sewing
 
 Zero GRAVITY runs Sewing from the world-space positions of the separate
-source parts before a new pending stage. Sewing orders
+source parts whenever the stored sewing record is not verified. Sewing orders
 marked boundary paths, matches them by normalized authored distance, and stores
 cross-panel pairs in a transient preview.
 
-Load records every part's initial Object Mode transform. Automatic Sewing ignores
-parts still in `PLACED`, includes `PENDING` parts as the new work, and retains
-`DONE` parts as connectivity anchors. Unresolvable paths stay pending; when a
-moved part completes one side of a multipart sewing group, that side is sewn
-without waiting for later parts.
+Every HOU part in the work collection participates; the selection only decides
+which parts deform (非選択固定). A sewing label whose partner panels are absent
+from a partial 裁断 waits rather than inventing pairs among the panels present.
 
 The preview is a visual connectivity record. It does not define a replacement
 initial cloth shape. Body geometry is not used by Sewing.
@@ -97,13 +95,9 @@ vertex-count changes are rejected. A result is discarded only when it is
 non-finite, or when it moves a vertex further than the whole Body -- that is a
 failure to locate a vertex, not cloth.
 
-On a successful press, pending parts become `DONE` without being relocked, so
-Zero GRAVITY may repeat immediately. Moving another placed part starts a new
-automatic Sewing stage. A later Load or switching Existing Lock on locks done
-parts while retaining seam connectivity.
-
-Nothing is kept between presses beyond Blender's own mesh state, so Undo and
-Redo behave as they do for any mesh edit.
+A press may repeat immediately: change the selection to change which parts
+deform, and press again. Nothing is kept between presses beyond Blender's own
+mesh state, so Undo and Redo behave as they do for any mesh edit.
 
 ## Prepare for ZOZO
 
@@ -156,15 +150,12 @@ automatically; inspect the groups, then use ZOZO's `Transfer` and
 `Run Simulation` controls. `shell_isect.dll` lives under `bin/` (or
 `SHELL_ISECT_DLL`).
 
-## Update
+## Revising a pattern
 
-Update rereads the same PDF and recuts the selected Clothes collection. Stable
-`#` labels and mirror instances identify corresponding parts. Existing object
-identity, transforms, materials, and collection ownership remain.
-
-If sewing membership changes, the next eligible Zero GRAVITY press rebuilds
-Sewing automatically. Pattern topology and material rest dimensions always come from
-the revised PDF.
+Housei has no Update button and reads no PDF. A revised pattern arrives as
+revised HOU parts from the external supplier (Katagami, MCP): delete the
+outdated copies from Clothes and press Cut out again. When sewing membership
+changes, the next Zero GRAVITY press rebuilds Sewing automatically.
 
 ## Silhouette utility
 
@@ -173,8 +164,9 @@ Character silhouettes are exported separately with
 
 ## Documentation
 
-- `SVG_TO_JSON_SPEC.md`: input, JSON, Load, automatic Sewing, and Update contract;
-- `KITSUKE_DESIGN.md`: Sewing, panel state, and what the ZOZO hand-off may do;
+- `SVG_TO_JSON_SPEC.md`: pattern JSON schema reference for external suppliers
+  (the loader workflow it describes lives outside Housei);
+- `KITSUKE_DESIGN.md`: Sewing, free/fixed parts, and what the ZOZO hand-off may do;
 - `PPF_ZERO_GRAVITY_DESIGN.md`: the ZOZO Contact Solver hand-off;
 - `ZOZO_HANDOFF_DESIGN.md`: what Prepare for ZOZO re-cuts and checks, and why;
 - `GRAINLINE_DESIGN.md`: grain-aligned mesh and material mapping;

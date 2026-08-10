@@ -43,8 +43,8 @@ or data-compatible with yohsai. PDF load lives in **Katagami**, not here.
   the arm two panels have to slide past each other, and a 10 mm facet stands too
   high off the surface it approximates for them to pass. `part_spacing_m` still
   answers with whatever pitch a part was actually cut at, so a garment carried
-  across the change keeps its 10 mm panels until Update re-cuts it, and Prepare
-  for ZOZO stops rather than hand over a half-converted garment.
+  across the change keeps its 10 mm panels until it is cut out afresh, and
+  Prepare for ZOZO stops rather than hand over a half-converted garment.
 - Housei had a cloth solver of its own until 0.13.0: a native square-lattice
   runtime behind a Normal GRAVITY button, with a CUDA path, an OpenMP colouring
   and an undoable session. It is gone, along with `native/`, `native_solver.py`
@@ -56,7 +56,6 @@ or data-compatible with yohsai. PDF load lives in **Katagami**, not here.
   carrying code whose only purpose was to defend against it.
 - Only a non-finite or implausibly large returned state causes a press to be
   discarded; the cloth is then left unchanged.
-- Update recuts meshes from stable panel labels.
 - `i18n.py` holds the N-panel's Japanese translation dictionary, registered
   under the add-on package name. Operator button labels resolve in the
   `Operator` context and panel headings, property names, and plain labels in

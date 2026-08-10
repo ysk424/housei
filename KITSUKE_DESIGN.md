@@ -1,13 +1,13 @@
 # Kitsuke Design
 
-Status: current Sewing, panel-state, and hand-off contract
+Status: current Sewing, free/fixed-part, and hand-off contract
 
 This document used to describe a cloth solver of Housei's own: a square-lattice
 runtime behind a Normal GRAVITY button, advanced one click at a time, with its
 own seam drag, Body contact, iteration counts and undoable session state. That
 solver is gone, and `SOLVER_DESIGN.md` with it. Zero GRAVITY sews with the ZOZO
 Contact Solver in a separate process, described in `PPF_ZERO_GRAVITY_DESIGN.md`
-and `ppf_zero_gravity.py`.
+and `zero_gravity.py`.
 
 What is described here is what outlived it: how seams are decided, what a panel's
 state means, and what the ZOZO hand-off may and may not do to the garment.
@@ -42,8 +42,8 @@ longer side's count:
 The recut is derived from the parsed pattern stored on the collection, not from
 the current mesh, so the authored curves are never modified. The interior grain
 lattice is untouched; only the seam boundary densifies and its transition band
-re-triangulates. Update restores the original curves, after which the next press
-re-adapts. A recut changes topology, so the current pose is transferred onto the
+re-triangulates. A fresh Cut out restores the original curves, after which the
+next press re-adapts. A recut changes topology, so the current pose is transferred onto the
 new mesh and Sewing is forced to rebuild on the matched boundaries.
 
 With equal counts the two boundaries pair 1:1 by index (the closed-ring case
@@ -95,30 +95,20 @@ with a cloth triangle's, which cannot lose a cloth–Body pair because a triangl
 cannot leave its own bounding box. The whole CHECK → FIX → CHECK is 26 s, and
 the result was confirmed against the uncropped 449k-triangle Body.
 
-Zero GRAVITY has its own, separate clearing step (`ppf_clear.py`), which runs
+Zero GRAVITY has its own, separate clearing step (`backends/ppf/clear.py`), which runs
 inside the solver process on the solver's own copy of the mesh and never on
 Blender's. The two are not a pipeline and do not share constants; see
 `PPF_ZERO_GRAVITY_DESIGN.md` for why the solver-side one exists at all.
 
-## Panel state, editing and Lock
+## Free and fixed parts
 
-Load stores each part's initial Object Mode matrix and initializes its monotonic
-state as `PLACED`. At a Zero GRAVITY press, a placed part whose Object Mode
-matrix has changed becomes `PENDING`. Automatic Sewing uses pending parts as the
-new work, retains `DONE` parts as possible sewing anchors, and omits placed
-parts. A press clears the independent deformation Lock from all pending parts
-before Sewing, so each pending part is deformable. A successful solve changes
-every pending participant to `DONE` and does not change its Lock.
-
-State and Lock are separate per-part attributes. Existing Lock is an explicit
-lock operation, not a continuously derived policy. Load turns it on and applies
-it: placed and done parts become locked, while pending parts become unlocked.
-Switching it off unlocks non-placed parts; switching it on applies the same
-operation again. Select Lock directly changes the selected parts' single
-deformation Lock. Placed parts remain outside the solve regardless of Lock.
-Unresolvable paths remain pending. A newly moved part resolves every valid
-connection available among the current participants, including one side of a
-multipart label whose other side is still placed.
+Housei keeps no per-part state machine and no lock switch. What deforms is
+decided at the press, from the selection: selected HOU parts in the work
+collection are free, and every non-selected HOU part is a fixed anchor through
+the per-object deformation Lock (`housei_kitsuke_locked`) — the same pin the
+ZOZO hand-off uses (非選択固定). An empty selection is a no-op. A fixed part
+still anchors seams, and a sewing label whose partner panels are absent from a
+partial 裁断 waits rather than inventing pairs among the panels present.
 
 Scaling and vertex-count changes are rejected: a press reads world vertices
 through each part's own matrix, and a scaled matrix would hand the solver a

@@ -1,11 +1,15 @@
 # Housei PDF-to-JSON Specification
 
-Status: implemented schema and Blender workflow contract
+Status: pattern JSON schema reference for external suppliers (Katagami, MCP).
+Housei 0.3.0 removed PDF load: the converter and the Load workflow described
+here are the supplier's job, kept as the schema's reference semantics. Housei
+itself starts at Cut out (裁断) from HOU parts the supplier created.
 Version: 1.0.0
 
 ## 1. Purpose
 
-Housei converts garment patterns authored in Adobe Illustrator from PDF into a
+The pattern supplier converts garment patterns authored in Adobe Illustrator
+from PDF into a
 single machine-readable JSON document. The converter is a standalone process.
 Blender starts it with a pattern path, waits asynchronously for it to finish, and
 then reads the resulting JSON. The converter does not import Blender modules or
@@ -117,7 +121,8 @@ expand or mirror the panel. An exact distance tie is an ambiguity error.
 
 A `#` label belongs to the one closed panel containing the transformed text
 origin. Zero or multiple containing panels is an error; Housei does not select a
-nearest panel. Update requires exactly one label in every panel.
+nearest panel. Every panel must carry exactly one label: stable `#` labels are
+what identify a panel across a pattern revision.
 
 All whitespace characters are removed before parsing. The leading `#` is not
 part of the stored value. ASCII letters compare case-insensitively and normalize
@@ -270,14 +275,13 @@ authored mesh dimensions.
 
 ### 10.3 Grain-aligned material mesh and triangulated proxy
 
-Housei fills the interior from a global square grid in pattern-page coordinates:
-page vertical is warp and page horizontal is weft. One constant per panel sets
-both the boundary sampling pitch and the interior grid pitch; `GRAINLINE_DESIGN.md`
-owns the pitch rules and the small-panel exception. Complete square cells retain
-grain metadata. Their two Blender/collision faces share one proxy diagonal.
-Arbitrary panel cuts leave a narrow triangular transition near the boundary.
-Sewing-relevant boundaries additionally carry the paving band of
-`SEAM_BOUNDARY_LAYER_DESIGN.md`. `Load` does not create loose sewing-preview
+The pattern page defines grain: page vertical is warp and page horizontal is
+weft. The interior is filled on a uniform equilateral triangular lattice in
+pattern-page coordinates; one constant sets both the boundary sampling pitch
+and the interior pitch, and `GRAINLINE_DESIGN.md` owns the pitch rules. The
+earlier square-cell grid, its small-panel pitch exception, and the seam paving
+band of `SEAM_BOUNDARY_LAYER_DESIGN.md` are gone; `housei_cut_scheme` records
+which builder cut a part. `Load` does not create loose sewing-preview
 edges, perform Sewing, or add a Blender Cloth modifier.
 
 Boundary edge attributes preserve sewing membership as Boolean mesh attributes
@@ -306,26 +310,23 @@ Expanded panels are packed horizontally without overlap:
 - flat-panel face normals point toward world `-Y`; tube normals point outward.
 
 The original PDF panel-to-panel offsets are not used for this initial packing.
-Each part stores its Load matrix and starts in `PLACED`. Moving it does not skip
-states: the next GRAVITY click promotes it to `PENDING`, and its first successful
-GRAVITY step promotes it to the terminal `DONE` state.
+Housei keeps no per-part state machine: at a Zero GRAVITY press, the selection
+decides which parts deform and every non-selected part is a fixed anchor
+(非選択固定).
 
-### 10.6 Load versus Update
+### 10.6 Load versus revision
 
-`Load` always creates a new unused numbered collection. `Update` is the
-implemented recut workflow for an existing collection and is specified in
-section 13. The current Update scope requires the same panel-object count and
-normalized `#` label and mirror-instance set, while triangulation and vertex
-counts may change.
+`Load` always creates a new unused numbered collection. Housei itself has no
+Update operation; revising a pattern is the supplier's job followed by a new
+Cut out (section 13).
 
 ## 11. Automatic Sewing
 
-The user positions and rotates the separate part objects before pressing either
-GRAVITY button. At that instant every moved `PLACED` part becomes `PENDING`, and
-its deformation Lock is cleared. Sewing then runs automatically
-from the current Object world transforms. `PENDING`
-parts are the new sewing work, `DONE` parts remain as connectivity anchors, and
-`PLACED` parts are omitted.
+The user positions and rotates the separate part objects before pressing
+Zero GRAVITY. Every HOU part in the work collection participates in Sewing;
+the selection only decides which parts deform. Sewing runs automatically from
+the current Object world transforms whenever the stored sewing record is not
+verified.
 
 For ordinary sewing labels, the marked boundary edges are split into connected,
 non-branching open paths and ordered by mesh topology. A label must occur on
@@ -361,8 +362,8 @@ They receive Boolean edge attributes named
 `sewing_spring_<LABEL>`. The original marked boundaries retain
 `sewing_<LABEL>`.
 
-Automatic Sewing creates a transient `<collection>_SEWN`, containing all pending
-and completed participant parts as disconnected face islands plus the loose
+Automatic Sewing creates a transient `<collection>_SEWN`, containing every
+participant part as disconnected face islands plus the loose
 sewing edges so Housei can verify and capture cross-panel pairs. The original separate part objects are
 kept in the same collection but hidden in the viewport and render. No Cloth
 modifier is added in this step. There is no user-visible Sewing action.
@@ -370,78 +371,49 @@ modifier is added in this step. There is no user-visible Sewing action.
 ## 12. GRAVITY
 
 The combined Sewing object is a connectivity record, not the persistent editing
-representation. Immediately after automatic Sewing, Housei reads
-its loose sewing edges and the positioned source-panel vertices, snapshots the
-evaluated Body for collision, and creates a transient simulation containing the
-participating source panels. Later clicks without new pending parts reuse that
-live runtime. Pattern rest lengths,
-square-cell metrics, and straight warp/weft triples define the cloth's internal
-response. Paired seam vertices are drawn together by a constant-distance
-positional closure until they are captured at their fixed zero-length goal.
-Self-contact is absent.
+representation. Dressing is Zero GRAVITY: every seam closes in one ZOZO Contact
+Solver job, run as a child process through the solver backend contract
+(`solver_backend.py`); `PPF_ZERO_GRAVITY_DESIGN.md` owns the description, and
+the physics tuning lives in `backend_ppf.py`. After the solve, positions are
+mapped back by source object and vertex index, the combined preview is removed,
+and the separate source objects are shown.
 
-`KITSUKE_DESIGN.md` owns every fixed runtime value — step size, substeps,
-iterations, seam closure, contact thickness — and cites the constant that
-defines each. Do not restate them here; a copy is what drifts.
+Nothing is kept between presses beyond Blender's own mesh state — no velocity,
+no session, no undoable runtime. The panels' placed position is their
+stress-free shape, so a press sews from flat and pressing again re-sews rather
+than advancing. The user may translate and rotate any selection of the source
+objects in Object Mode between presses.
 
-After the calculation, positions are mapped
-back by source object and vertex index, the combined preview is removed, and
-the separate source objects are shown. Every pending part becomes `DONE` without
-changing its Lock, so GRAVITY can repeat immediately. The user may translate and rotate any
-selection of those objects in Object Mode before clicking again. A transformed
-part starts the next click with zero velocity; unchanged parts retain velocity.
-
-Object scaling and vertex-count changes are rejected during a session. Direct
+Object scaling and vertex-count changes are rejected. Direct
 vertex edits and same-vertex-count topology edits are unsupported but are not
 yet completely detected; topology must be changed in the pattern. The Body is
-constant within one live runtime.
-
-Exact seam pairs and fixed targets, per-vertex velocity, revision, runtime epoch,
-and Object Mode matrices are stored in undoable Blender data
-after every committed click. Blender `undo_post` and
-`redo_post` handlers discard non-undoable live runtimes. The next GRAVITY click
-reconstructs them from the state restored by Blender. Recovery data is valid only for the current add-on
-runtime. Continuing an abandoned partially dressed session after reopening
-Blender or reloading the add-on is unsupported.
+a static collider.
 
 Fixed material values are runtime behavior rather than pattern data and do not
 alter the JSON contract. Material rest data is taken only from the pattern mesh;
 Body data is collision-only. The only product backend is the ZOZO Contact
 Solver, run from its own checkout.
 
-## 13. Update
+## 13. Pattern revision
 
-Update rereads the same absolute PDF path that created the selected Clothes
-collection. The normalized `#` labels and expanded mirror-instance set must be
-unchanged. The operation generates entirely new panel meshes; vertex and face
-counts may differ.
+Housei has no Update operation and reads no PDF: a revised pattern arrives as
+revised HOU parts from the supplier, and the operator deletes the outdated
+copies from Clothes and presses Cut out again (`README.md`,
+"Revising a pattern").
 
-Load stores each vertex's authoritative flat-pattern position as the Point
-attribute `housei_pattern_position`. Update normalizes the revised and previous
-panel bounds, locates the corresponding old flat triangle, and barycentrically
-interpolates its current world-space deformation onto each new vertex. This is
-an initial-placement convenience, not a claim that the old and new cloth are
-physically identical.
-
-RING panels additionally store `housei_construction_position`. Their Update
-transfer uses the welded cylinder surface as the correspondence domain because
-a welded seam vertex cannot carry both sides of an unwrapped 2D coordinate.
-
-Existing objects, transforms, materials, collection membership, names, and
-panel indices remain. Runtime velocity and the previous Kitsuke session are
-discarded.
-
-Update prepares all meshes before changing Blender data. Any missing, duplicate,
-unexpected, or ambiguous label, panel-count change, parse error, triangulation
-error, or transfer failure cancels the whole operation without modifying the
-existing garment.
+What survives of the old Update contract is the attributes it relied on, which
+current Housei still requires: the supplier stores each vertex's authoritative
+flat-pattern position as the Point attribute `housei_pattern_position`
+(Zero GRAVITY rebuilds the solver mesh in this domain and refuses a part
+without it), and RING panels additionally store
+`housei_construction_position`, because a welded seam vertex cannot carry both
+sides of an unwrapped 2D coordinate.
 
 The sewing signature contains normalized sewing labels, panel/segment
 membership, mirror flags, TOP coordinates, and RING segment indices, but not
 ordinary geometry coordinates. An unchanged signature preserves the verified
-Sewing state and permits direct GRAVITY. A changed signature clears verification;
-the next GRAVITY click rebuilds Sewing automatically from the current pending
-and completed participants.
+Sewing state and permits direct GRAVITY. A changed signature clears
+verification; the next Zero GRAVITY press rebuilds Sewing automatically.
 
 ## 14. Future compatibility
 

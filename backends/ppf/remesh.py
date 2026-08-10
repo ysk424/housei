@@ -22,7 +22,7 @@ The original mesh is never modified.  Results come back through
 sits in, so Blender keeps its own topology, its pattern coordinates, and its
 grainline attributes, and Normal GRAVITY still works on the same panels.
 
-This module runs in the ZOZO tree's interpreter, alongside `ppf_driver`, and
+This module runs in the ZOZO tree's interpreter, alongside `driver`, and
 may use scipy; it must never be imported from Blender.
 """
 

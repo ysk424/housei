@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Sew Housei panels with the ZOZO Contact Solver, outside Blender.
 
-This module never runs inside Blender.  It is executed by the ZOZO tree's
-own Python interpreter as a child process of :mod:`ppf_zero_gravity`, so
+This module never runs inside Blender.  It is the PPF payload behind the
+solver backend contract (version 1, owned by ``solver_backend.py``): Housei
+runs it with the ZOZO tree's own Python interpreter as a child process, so
 the CUDA backend, its Rust cdylib, and its numpy stay entirely out of
 Blender's address space: a solver crash costs the click, not the session.
 
-The contract is two ``.npz`` files whose layout ``ppf_zero_gravity`` owns.
-Input carries flat cloth panels, their triangles, the 1:1 seam pairs, the
-static Body, and the solver settings; output carries the sewn cloth in the
-caller's own vertex order plus what the run measured.
+The channel is three files named on the command line: ``--input`` carries
+flat cloth panels, their triangles, the 1:1 seam pairs, the static Body, and
+the settings; ``--output`` carries the sewn cloth in the caller's own vertex
+order plus what the run measured; ``--error`` is written instead when the
+run fails in a way this driver can observe.  ``--ppf-root`` is the one thing
+the contract does not carry, because launch information is not scene data.
 
 Vertex order is the one thing that cannot be assumed.  ``Scene.build``
 renumbers vertices, so every read-back goes through the per-object
@@ -24,6 +27,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 import numpy as np
 
@@ -31,8 +35,19 @@ import numpy as np
 # usual script-directory entry, so a sibling import needs saying explicitly.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import ppf_clear  # noqa: E402
-import ppf_remesh  # noqa: E402
+import clear  # noqa: E402
+import remesh  # noqa: E402
+
+
+CONTRACT_VERSION = 1
+
+
+class DriverError(RuntimeError):
+    """A failure this driver can name, for the contract's error file.
+
+    The message is the diagnosis the caller shows the operator, so it is
+    written for them rather than for a log.
+    """
 
 
 def _load_frontend(ppf_root: str):
@@ -42,13 +57,13 @@ def _load_frontend(ppf_root: str):
     the tree root is the only thing that has to be right.
     """
     if not os.path.isdir(ppf_root):
-        raise SystemExit(f"ZOZO tree not found: {ppf_root}")
+        raise DriverError(f"ZOZO tree not found: {ppf_root}")
     if ppf_root not in sys.path:
         sys.path.insert(0, ppf_root)
     try:
         from frontend import App  # type: ignore[import-not-found]
     except ImportError as exc:
-        raise SystemExit(
+        raise DriverError(
             f"Could not import the ZOZO frontend from {ppf_root}: {exc}. "
             "Build it there with `cargo build --release` first."
         ) from exc
@@ -72,10 +87,75 @@ def _stitch_rows(pairs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return index, weight
 
 
-def run(input_path: str, output_path: str) -> dict:
+def run(input_path: str, output_path: str, error_path: str, ppf_root: str) -> dict:
+    """Sew one scene, or write the contract's error file and exit nonzero.
+
+    Every failure this driver can name reaches the operator through
+    `error.json`; the caller only falls back to scraping stderr for the ones
+    it cannot -- a CUDA abort or an out-of-memory kill never gets here.
+    """
+    phase = _Phase()
+    try:
+        return _pipeline(input_path, output_path, ppf_root, phase)
+    except Exception as exc:  # noqa: BLE001 - the error file carries anything
+        _write_error(error_path, phase.stage, exc)
+        raise SystemExit(1) from exc
+
+
+class _Phase:
+    """Names the phase currently running, so a failure can say where it was.
+
+    The pipeline reads as one straight line, and wrapping each step in its
+    own try block would bury that; this keeps the line and still gives the
+    error file a `stage`.
+    """
+
+    def __init__(self) -> None:
+        self.stage = "load"
+
+    def __call__(self, stage: str) -> str:
+        self.stage = stage
+        return stage
+
+
+def _write_error(error_path: str, stage: str, exc: BaseException) -> None:
+    """The contract's error file: one line of diagnosis, plus the evidence."""
+    message = str(exc).strip() or exc.__class__.__name__
+    detail = "".join(
+        traceback.format_exception(type(exc), exc, exc.__traceback__)
+    ).strip()
+    try:
+        with open(error_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "contract": CONTRACT_VERSION,
+                    "stage": stage,
+                    "message": message,
+                    "detail": detail,
+                },
+                handle,
+                indent=2,
+            )
+    except OSError:
+        # The error file is a courtesy; the exit code and stderr still carry
+        # the failure, and losing the report must not hide the reason for it.
+        pass
+    print(f"{stage}: {message}", file=sys.stderr)
+    if detail:
+        print(detail, file=sys.stderr)
+
+
+def _pipeline(input_path: str, output_path: str, ppf_root: str, phase: _Phase) -> dict:
+    phase("load")
     data = np.load(input_path)
-    ppf_root = str(data["ppf_root"])
-    App = _load_frontend(ppf_root)
+    settings = json.loads(str(data["settings"]))
+    contract = int(settings.get("contract", -1))
+    if contract != CONTRACT_VERSION:
+        raise DriverError(
+            f"This solver backend speaks contract {CONTRACT_VERSION}, "
+            f"but the scene was written for contract {contract}."
+        )
+    tuning = settings["backend"]
 
     cloth_vertices = np.ascontiguousarray(data["cloth_vertices"], dtype=np.float64)
     cloth_faces = np.ascontiguousarray(data["cloth_faces"], dtype=np.int64)
@@ -83,26 +163,31 @@ def run(input_path: str, output_path: str) -> dict:
     body_vertices = np.ascontiguousarray(data["body_vertices"], dtype=np.float64)
     body_faces = np.ascontiguousarray(data["body_faces"], dtype=np.int64)
     locked = np.ascontiguousarray(data["locked"], dtype=np.int64)
-    settings = json.loads(str(data["settings"]))
+    cloth_pattern = np.ascontiguousarray(data["cloth_pattern"], dtype=np.float64)
+
+    phase("frontend")
+    App = _load_frontend(ppf_root)
 
     # Housei's own triangulation carries interior slivers an implicit solver
-    # cannot assemble; ppf_remesh replaces each panel's interior while keeping
+    # cannot assemble; remesh replaces each panel's interior while keeping
     # its outline, so the seams and the cut are untouched.
-    cloth_pattern = np.ascontiguousarray(data["cloth_pattern"], dtype=np.float64)
-    rebuilt = ppf_remesh.rebuild(cloth_vertices, cloth_faces, cloth_pattern)
+    phase("remesh")
+    rebuilt = remesh.rebuild(cloth_vertices, cloth_faces, cloth_pattern)
     solve_faces = rebuilt["faces"]
     # Rebuilding curved cloth chords inside its own surface, and against a Body
     # the cloth already rests on that is inside the Body. An intersection-free
     # scene is what the solver's guarantee is built on, so what the rebuild
     # pushed in is put back before the scene is.
-    solve_vertices, clearance = ppf_clear.clear_body(
+    phase("clear")
+    solve_vertices, clearance = clear.clear_body(
         rebuilt["vertices"], solve_faces, body_vertices, body_faces
     )
-    solve_seams = ppf_remesh.remap_seams(seam_pairs, rebuilt["kept"])
+    solve_seams = remesh.remap_seams(seam_pairs, rebuilt["kept"])
     solve_locked = np.zeros(len(solve_vertices), dtype=np.int64)
     locked_clean = rebuilt["kept"][np.flatnonzero(locked)]
     solve_locked[locked_clean[locked_clean >= 0]] = 1
 
+    phase("build")
     app = App.create(settings["session_name"])
     app.asset.add.tri("cloth", solve_vertices, solve_faces)
     app.asset.add.stitch("seams", _stitch_rows(solve_seams))
@@ -110,10 +195,10 @@ def run(input_path: str, output_path: str) -> dict:
 
     scene = app.scene.create()
     cloth = scene.add("cloth")
-    cloth.param.set("young-mod", settings["young_modulus"])
-    cloth.param.set("bend", settings["bend"])
-    cloth.param.set("strain-limit", settings["strain_limit"])
-    cloth.param.set("stitch-stiffness", settings["stitch_stiffness"])
+    cloth.param.set("young-mod", tuning["young_modulus"])
+    cloth.param.set("bend", tuning["bend"])
+    cloth.param.set("strain-limit", tuning["strain_limit"])
+    cloth.param.set("stitch-stiffness", tuning["stitch_stiffness"])
     cloth.stitch("seams")
     # A Locked panel is the operator holding cloth in place, so it is a
     # prescribed boundary rather than something the solve may move.
@@ -136,10 +221,10 @@ def run(input_path: str, output_path: str) -> dict:
     # cloth drifting, so the frame the job happens to stop on decides the
     # answer. So: close the seams undamped, then switch drag on and let
     # the sewn shape come to rest.
-    sew_frames = int(settings["sew_frames"])
-    settle_frames = int(settings["settle_frames"])
+    sew_frames = int(tuning["sew_frames"])
+    settle_frames = int(tuning["settle_frames"])
     frames = sew_frames + settle_frames
-    time_step = float(settings["time_step"])
+    time_step = float(tuning["time_step"])
 
     session = app.session.create(scene)
     param = session.param
@@ -151,19 +236,21 @@ def run(input_path: str, output_path: str) -> dict:
     # touching, which is why panels laid out for cutting creep instead of
     # closing. Raising the cap past the widest seam restores a force that
     # actually reflects how far the two sides still have to travel.
-    param.set("stitch-length-factor", float(settings["stitch_length_factor"]))
+    param.set("stitch-length-factor", float(tuning["stitch_length_factor"]))
     param.set("dt", time_step)
     param.set("frames", frames)
     if settle_frames:
         param.dyn("isotropic-air-friction").time(sew_frames * time_step).hold().change(
-            float(settings["air_drag"])
+            float(tuning["air_drag"])
         )
     session = session.build()
 
+    phase("solve")
     solve_started = time.time()
     session.start(blocking=True)
     solve_seconds = time.time() - solve_started
 
+    phase("readback")
     # local -> global from the build; invert it to restore the caller's order.
     to_global = np.asarray(scene._map_by_name["cloth"], dtype=np.int64)
     output_dir = os.path.join(session.info.path, "output")
@@ -183,7 +270,7 @@ def run(input_path: str, output_path: str) -> dict:
     # Interpolating positions hands back the surface the solver actually
     # guaranteed, which is the one that clears the Body.
     solved = positions[to_global].astype(np.float64)
-    sewn = ppf_remesh.transfer(rebuilt, solved, len(cloth_vertices))
+    sewn = remesh.transfer(rebuilt, solved, len(cloth_vertices))
 
     global_pairs = to_global[solve_seams]
     gaps = np.linalg.norm(
@@ -217,7 +304,13 @@ def run(input_path: str, output_path: str) -> dict:
         "seam_gap_max_mm": float(gaps.max()) * 1000.0,
         "residual_motion_mm": residual_mm,
     }
-    np.savez(output_path, cloth_vertices=sewn, report=json.dumps(report))
+    phase("write")
+    np.savez(
+        output_path,
+        contract=np.int64(CONTRACT_VERSION),
+        cloth_vertices=sewn,
+        report=json.dumps(report),
+    )
     return report
 
 
@@ -238,7 +331,7 @@ def _require_progress(session_dir: str, output_dir: str) -> None:
         detail = lines[0] if lines else ""
     except OSError:
         pass
-    raise SystemExit(
+    raise DriverError(
         "The solver stopped before completing a single frame"
         + (f": {detail}" if detail else ".")
     )
@@ -254,15 +347,17 @@ def _last_written_frame(output_dir: str, requested: int) -> int:
     for frame in range(requested, 0, -1):
         if os.path.isfile(os.path.join(output_dir, f"vert_{frame}.bin")):
             return frame
-    raise SystemExit(f"The solver wrote no simulated frames to {output_dir}.")
+    raise DriverError(f"The solver wrote no simulated frames to {output_dir}.")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--error", required=True)
+    parser.add_argument("--ppf-root", required=True)
     arguments = parser.parse_args(argv)
-    report = run(arguments.input, arguments.output)
+    report = run(arguments.input, arguments.output, arguments.error, arguments.ppf_root)
     # The parent reads the report from the output file; this is for the log.
     print(json.dumps(report, indent=2))
     return 0

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Lift the rebuilt panels clear of the Body before the scene is built.
 
-`ppf_remesh` rebuilds a panel by reading every new point off the original
+`remesh` rebuilds a panel by reading every new point off the original
 triangles, so each point lands *on* the cloth.  The triangles between them do
 not: they span the original ones, and across curvature a chord cuts inside
 the surface it replaces.  On cloth already resting against the Body -- a
@@ -22,7 +22,7 @@ the rebuild moved, in the direction the Body's own surface points, far enough
 to clear it and no further.  Cloth the operator placed is not touched unless
 the rebuild put it inside the Body.
 
-This module runs in the ZOZO tree's interpreter, alongside `ppf_driver`; it
+This module runs in the ZOZO tree's interpreter, alongside `driver`; it
 must never be imported from Blender.
 """
 
@@ -53,11 +53,22 @@ class ClearError(RuntimeError):
 
 
 def _library():
-    """The tri-tri checker that ships with the add-on, or None."""
-    directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
-    path = os.path.join(directory, "shell_isect.dll")
+    """The tri-tri checker that ships with the add-on, or None.
+
+    The caller sets `SHELL_ISECT_DLL` (the add-on's own convention, see
+    `shell_isect_bridge.py`) so the checker is found wherever this payload
+    was installed; the add-on's `bin/` is the fallback for running the
+    driver by hand from a checkout.
+    """
+    path = os.environ.get("SHELL_ISECT_DLL", "").strip()
+    if not path or not os.path.isfile(path):
+        here = os.path.dirname(os.path.abspath(__file__))
+        # Two levels up from backends/ppf/ is the add-on root.
+        path = os.path.join(here, os.pardir, os.pardir, "bin", "shell_isect.dll")
+        path = os.path.normpath(path)
     if not os.path.isfile(path):
         return None
+    directory = os.path.dirname(path)
     try:
         # The checker is OpenMP; its runtime sits beside it, and Windows does
         # not search a DLL's own directory for its dependencies by default.

@@ -24,8 +24,9 @@ from bpy.types import (
 from .hou import is_hou_part, sync_hou_from_object
 from .i18n import msg, translations_dict
 from .kitsuke import KitsukeError, adapt_seam_counts
-from . import ppf_zero_gravity
-from .ppf_zero_gravity import SETTLE_FRAMES, SEWING_FRAMES, sew_zero_gravity
+from . import backend_ppf
+from .backend_ppf import SETTLE_FRAMES, SEWING_FRAMES
+from .zero_gravity import sew_zero_gravity
 from .mesh_loader import (
     CUT_OUT_Z_OFFSET_M,
     apply_nonselected_fixed,
@@ -343,7 +344,7 @@ class HouseiPreferences(AddonPreferences):
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "ppf_root")
-        resolved = ppf_zero_gravity.describe_zozo_root()
+        resolved = backend_ppf.describe_zozo_root()
         ok = resolved.startswith("Using") or resolved.startswith("使用中")
         layout.label(text=resolved, icon="CHECKMARK" if ok else "ERROR")
 

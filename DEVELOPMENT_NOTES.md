@@ -1,7 +1,7 @@
 # Housei Development Notes
 
 Status: independent Japanese product (縫製), started from a yohsai 0.14.7
-source snapshot. Package version is `0.3.0` under `id = "housei"`. Not binary-
+source snapshot. Package version is `0.4.0` under `id = "housei"`. Not binary-
 or data-compatible with yohsai. PDF load lives in **Katagami**, not here.
 
 ## Architecture
@@ -19,12 +19,14 @@ or data-compatible with yohsai. PDF load lives in **Katagami**, not here.
   collection. Matched sides pair 1:1 so the longer edge gathers. A recut changes
   topology and therefore forces a Sewing rebuild.
 - Zero GRAVITY closes every seam in one
-  ZOZO Contact Solver job (`ppf_zero_gravity.py` -> `ppf_driver.py`), run as a
-  child process in the solver's own tree so its CUDA backend stays out of
-  Blender. The Body goes over as a static collider and the panels start flat,
-  which is what makes the scene intersection-free at the start and the step
-  cost small. A press sews from flat, so pressing again re-sews rather than
-  advancing.
+  ZOZO Contact Solver job (`zero_gravity.py` -> `backend_ppf.py` ->
+  `backends/ppf/driver.py`), run as a child process in the solver's own tree so
+  its CUDA backend stays out of Blender. The Body goes over as a static collider
+  and the panels start flat, which is what makes the scene intersection-free at
+  the start and the step cost small. A press sews from flat, so pressing again
+  re-sews rather than advancing.
+- Zero GRAVITY talks to the solver through the backend contract in
+  `solver_backend.py`; nothing under `backends/` is ever imported by Blender.
 - Prepare for ZOZO (`ZOZO用準備作業`) re-cuts, copies, and checks, in that
   order: `remesh_with_seam_counts` first so what goes over is a panel the
   current triangulation built rather than whichever one was in the scene, then

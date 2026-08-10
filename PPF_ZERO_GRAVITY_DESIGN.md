@@ -43,12 +43,16 @@ The rest is below.
 
 ## Shape
 
-`ppf_zero_gravity.py` runs inside Blender: it gathers the panels, their seams,
-the Body and the settings, and hands them to `ppf_driver.py` as an `.npz`.
-`ppf_driver.py` runs in the ZOZO tree's own interpreter as a child process, so
-the CUDA backend, its Rust cdylib and its numpy stay out of Blender: a solver
-crash costs the click, not the session. `ppf_weld.py` runs there too and may
-use scipy; it must never be imported from Blender.
+`zero_gravity.py` runs inside Blender: it gathers the panels, their seams and
+the Body, and states them as a job for whichever solver backend is registered.
+`backend_ppf.py` is the ZOZO adapter -- where the checkout is, which
+interpreter owns it, and every solver setting -- and `solver_backend.py` owns
+the contract the two sides meet on, an `.npz` in and an `.npz` out.
+`backends/ppf/driver.py` runs in the ZOZO tree's own interpreter as a child
+process, so the CUDA backend, its Rust cdylib and its numpy stay out of
+Blender: a solver crash costs the click, not the session. Its siblings under
+`backends/ppf/` run there too and may use scipy; nothing in that directory may
+ever be imported from Blender.
 
 Vertex order cannot be assumed. `Scene.build` renumbers vertices, so every
 read-back goes through the per-object `local -> global` map the build returns.

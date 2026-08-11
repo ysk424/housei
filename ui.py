@@ -37,6 +37,7 @@ from .mesh_loader import (
     participating_parts,
     remove_sewn_preview,
 )
+from .sewing_plan import build_plan_payload, store_plan_payload
 from .shell_isect_bridge import library_version
 from .zozo_handoff import ZOZO_MCP_PORT, ZozoHandoffError, prepare_for_zozo
 
@@ -482,9 +483,19 @@ def _run_zero_gravity(operator: Operator, context):
         apply_nonselected_fixed(collection, free)
         _prepare_sewing(context, collection)
         remove_sewn_preview(collection, reveal_parts=True)
+        # Built here so it names the pairs this press sews, but written only
+        # after the press succeeds: a failed solve keeps the plan of the last
+        # garment that was actually sewn.
+        plan_payload = build_plan_payload(collection)
         message = sew_zero_gravity(context, collection, props.body_object)
         for obj in hou_parts_in_collection(collection):
             sync_hou_from_object(obj)
+        try:
+            pair_count = store_plan_payload(collection, plan_payload)
+        except Exception as exc:
+            message += msg("plan_save_failed", exc=str(exc)[:120])
+        else:
+            message += msg("plan_saved", pairs=pair_count)
     except Exception as exc:
         message = str(exc).strip() or type(exc).__name__
         props.parse_status = msg("zero_g_failed", exc=message[:240])

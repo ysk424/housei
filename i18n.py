@@ -70,6 +70,8 @@ _STATUS_EN: dict[str, str] = {
         "seam gap mean {gap_mean:.2f} mm, max {gap_max:.2f} mm; "
         "last frame moved {residual:.3f} mm"
     ),
+    "plan_saved": "; saved the sewing plan ({pairs} pairs) for external exporters",
+    "plan_save_failed": "; the sewing plan could not be saved: {exc}",
     "kitsuke_need_two_parts": "{purpose} needs at least two HOU parts.",
     "kitsuke_apply_scale": (
         "Apply Scale on {name} before {purpose}; "
@@ -268,6 +270,8 @@ _STATUS_JA: dict[str, str] = {
         "縫い目すきま 平均 {gap_mean:.2f} mm、最大 {gap_max:.2f} mm; "
         "最終フレーム移動 {residual:.3f} mm"
     ),
+    "plan_saved": "; 縫いプラン（ペア {pairs} 組）を外部書き出し用に保存しました",
+    "plan_save_failed": "; 縫いプランを保存できませんでした: {exc}",
     "kitsuke_need_two_parts": "{purpose} には HOU パーツが少なくとも 2 つ必要です。",
     "kitsuke_apply_scale": (
         "{purpose} の前に {name} に「スケールを適用」してください。"

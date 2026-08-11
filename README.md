@@ -99,6 +99,11 @@ A press may repeat immediately: change the selection to change which parts
 deform, and press again. Nothing is kept between presses beyond Blender's own
 mesh state, so Undo and Redo behave as they do for any mesh edit.
 
+A successful press also records the verified sewing plan on the Clothes
+collection (`housei_sewing_plan_json`), so an external exporter can read the
+sewn garment -- panels, drape, flat pattern, seam pairs -- from the `.blend`
+alone, without any Housei code. See `SEWING_PLAN_DESIGN.md`.
+
 ## Prepare for ZOZO
 
 `Prepare for ZOZO` hands the garment over exactly as it stands. It does not
@@ -167,6 +172,9 @@ Character silhouettes are exported separately with
 - `SVG_TO_JSON_SPEC.md`: pattern JSON schema reference for external suppliers
   (the loader workflow it describes lives outside Housei);
 - `KITSUKE_DESIGN.md`: Sewing, free/fixed parts, and what the ZOZO hand-off may do;
+- `SEWING_PLAN_DESIGN.md`: the persisted sewing plan external exporters read;
+- `DOWNSTREAM_PROTOCOL.md`: 下流ソフト開発プロトコル — how downstream
+  extensions read the dressed garment, with a validated reference reader;
 - `PPF_ZERO_GRAVITY_DESIGN.md`: the ZOZO Contact Solver hand-off;
 - `ZOZO_HANDOFF_DESIGN.md`: what Prepare for ZOZO re-cuts and checks, and why;
 - `GRAINLINE_DESIGN.md`: grain-aligned mesh and material mapping;

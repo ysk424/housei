@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "housei"
-version = "0.4.0"
+version = "0.5.0"
 name = "Housei"
 tagline = "縫製: Cut out, Zero GRAVITY, ZOZO (HOU parts from Katagami/MCP)"
 maintainer = "Yoshihiko Tsukamoto"
@@ -31,12 +31,15 @@ paths = [
     "backends/ppf/driver.py",
     "backends/ppf/remesh.py",
     "backends/ppf/clear.py",
+    "sewing_plan.py",
     "zozo_handoff.py",
     "zozo_mcp_client.py",
     "shell_isect_bridge.py",
     "mesh_loader.py",
     "SVG_TO_JSON_SPEC.md",
     "HOU_DESIGN.md",
+    "SEWING_PLAN_DESIGN.md",
+    "DOWNSTREAM_PROTOCOL.md",
     "KITSUKE_DESIGN.md",
     "PPF_ZERO_GRAVITY_DESIGN.md",
     "ZOZO_HANDOFF_DESIGN.md",

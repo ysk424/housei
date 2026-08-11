@@ -152,3 +152,4 @@ already present still resolve.
 - `SVG_TO_JSON_SPEC.md` — pattern JSON before mesh/HOU
 - `KITSUKE_DESIGN.md` — sewing and solver hand-off
 - `PPF_ZERO_GRAVITY_DESIGN.md` — Zero GRAVITY job
+- `SEWING_PLAN_DESIGN.md` — persisted seam pairs for external exporters

@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 
 id = "housei"
 version = "0.5.0"
-name = "Housei"
+name = "縫製"
 tagline = "縫製: Cut out, Zero GRAVITY, ZOZO (HOU parts from Katagami/MCP)"
 maintainer = "Yoshihiko Tsukamoto"
 type = "add-on"
